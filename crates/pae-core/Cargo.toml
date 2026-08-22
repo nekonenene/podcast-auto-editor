@@ -1,0 +1,31 @@
+[package]
+name = "pae-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+# Silero VAD (ONNX モデル同梱、ort 経由で推論)
+voice_activity_detector = "0.2.1"
+
+# whisper.cpp バインディング。macOS では Metal を有効化する
+whisper-rs = "0.16"
+
+hound = "3.5"
+directories = "6"
+toml = "1"
+tempfile = "3"
+
+# 文字起こしモデルの初回ダウンロード用 (処理自体は完全ローカル)
+ureq = "3"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+whisper-rs = { version = "0.16", features = ["metal"] }
+
+[dev-dependencies]
+insta = "1"
