@@ -1,4 +1,4 @@
-//! パイプライン全体のオーケストレーション。
+//! パイプライン全体のオーケストレーション
 //! probe → 音声抽出 → VAD → タイムライン → カット → BGM → loudnorm → MP3 → 文字起こし → 出力
 
 use std::path::{Path, PathBuf};
@@ -89,7 +89,7 @@ impl JobReport {
     }
 }
 
-/// 出力ファイル名を入力ファイル名から自動生成する。
+/// 出力ファイル名を入力ファイル名から自動生成する
 /// 例: input.mp4 → input-edited.mp4, input-podcast.mp3, input-transcript.srt
 pub fn output_path(output_dir: &Path, input: &Path, suffix: &str, ext: &str) -> PathBuf {
     let stem = input
@@ -270,7 +270,7 @@ pub fn run_job(spec: &JobSpec, sink: &dyn ProgressSink, cancel: &CancelToken) ->
     })?;
     outputs.push(mp3_path);
 
-    // 文字起こしは編集後の音声に対して行う。
+    // 文字起こしは編集後の音声に対して行う
     // タイムスタンプが完成品の MP4 / MP3 と一致し、SRT がそのまま使えるため
     if spec.transcribe {
         let segments = transcribe_media(
@@ -311,7 +311,7 @@ pub fn run_job(spec: &JobSpec, sink: &dyn ProgressSink, cancel: &CancelToken) ->
     })
 }
 
-/// probe 済みの入力から VAD → タイムライン生成までを行う。
+/// probe 済みの入力から VAD → タイムライン生成までを行う
 /// `pae analyze` からも `run_job` からも使う
 pub fn analyze(
     ffmpeg: &Ffmpeg,

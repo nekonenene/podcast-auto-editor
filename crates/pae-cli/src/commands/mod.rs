@@ -9,7 +9,7 @@ pub mod transcribe;
 use pae_core::pipeline::JobReport;
 use pae_core::progress::CancelToken;
 
-/// Ctrl+C で処理を中断できるようにする。
+/// Ctrl+C で処理を中断できるようにする
 /// 2回目の Ctrl+C は通常のシグナル動作 (即終了) に任せる
 pub fn install_cancel_handler() -> anyhow::Result<CancelToken> {
     let token = CancelToken::new();

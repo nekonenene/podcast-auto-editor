@@ -1,5 +1,5 @@
-//! ffmpeg で生成した短いテストメディアを使う統合テスト。
-//! カット結果の長さ・A/V 同期・トーン位置を数値で検証する。
+//! ffmpeg で生成した短いテストメディアを使う統合テスト
+//! カット結果の長さ・A/V 同期・トーン位置を数値で検証する
 //! ffmpeg が PATH にあることが前提 (開発必須要件のため、なければ失敗させる)
 
 use std::path::{Path, PathBuf};
@@ -25,7 +25,7 @@ fn cancel() -> CancelToken {
     CancelToken::new()
 }
 
-/// トーンパターン動画を生成する。
+/// トーンパターン動画を生成する
 /// 音声: 2s 440Hz → 4s 無音 → 2s 880Hz → 1s 無音 → 2s 440Hz (計11秒)
 fn generate_tone_video(ffmpeg: &Ffmpeg, dir: &Path) -> PathBuf {
     let out = dir.join("tone.mp4");
@@ -285,7 +285,7 @@ fn loudnorm_reaches_target() {
     );
 }
 
-/// 文字起こしの統合テスト。tiny モデルのダウンロードが必要なため #[ignore]。
+/// 文字起こしの統合テスト。tiny モデルのダウンロードが必要なため #[ignore]
 /// 実行: cargo test -p pae-core -- --ignored
 #[test]
 #[ignore]

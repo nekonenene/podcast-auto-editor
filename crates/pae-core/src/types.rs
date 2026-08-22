@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-/// VAD が検出した発話区間。時刻はすべて入力メディア先頭からのミリ秒。
+/// VAD が検出した発話区間。時刻はすべて入力メディア先頭からのミリ秒
 ///
 /// 時間を f64 秒ではなく u64 ミリ秒で持つのは、境界値の比較（1500ms ちょうど等）と
 /// セグメント連続性の検証を浮動小数の誤差から守るため
@@ -25,7 +25,7 @@ pub enum SegmentKind {
     Silence,
 }
 
-/// セグメントをどう扱うか。
+/// セグメントをどう扱うか
 /// 将来のフィラー削除や手動カットは Speech + Remove として表現できる
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -59,8 +59,8 @@ pub struct TimelineStats {
     pub compressed_count: usize,
 }
 
-/// 編集内容を表す中間データ。
-/// segments は入力の 0ms から末尾までを隙間なくカバーする不変条件を持つ。
+/// 編集内容を表す中間データ
+/// segments は入力の 0ms から末尾までを隙間なくカバーする不変条件を持つ
 /// JSON として保存でき、手修正して再レンダリングにも使える
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EditTimeline {
@@ -81,7 +81,7 @@ pub const TIMELINE_VERSION: u32 = 1;
 pub struct VadParams {
     /// 発話と判定する確率のしきい値。下げるほど小さな声を拾う
     pub threshold: f32,
-    /// これより短い発話候補はノイズとして無視する。
+    /// これより短い発話候補はノイズとして無視する
     /// 日本語の短い相槌（「うん」等）が 100〜200ms 程度なので大きくしすぎない
     pub min_speech_ms: u64,
     /// これより短い無音は発話の一部とみなして前後をつなげる

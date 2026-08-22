@@ -1,5 +1,5 @@
 #!/bin/bash
-# テスト用のメディアファイルを fixtures/ に生成する。
+# テスト用のメディアファイルを fixtures/ に生成する
 # 巨大な動画を Git で管理する代わりに、既知のパターンを持つ短いメディアを
 # ffmpeg (と macOS の say) で再現可能に作る
 set -euo pipefail
