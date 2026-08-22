@@ -1,4 +1,4 @@
-//! タイムラインに基づく動画の再構成、BGM ミックス、ラウドネス調整
+//! タイムラインに基づく動画の再構成、BGM ミックス、ラウドネス調整。
 //! ffmpeg のフィルタ式を生成する部分は純粋関数にしてテスト可能にしている
 
 use std::path::Path;
@@ -10,7 +10,7 @@ use crate::progress::CancelToken;
 
 use super::ffmpeg::Ffmpeg;
 
-/// keep_ranges (ミリ秒) から select/aselect 用のフィルタスクリプトを生成する
+/// keep_ranges (ミリ秒) から select/aselect 用のフィルタスクリプトを生成する。
 ///
 /// カット後に setpts / asetpts でタイムスタンプをゼロから振り直すこと、
 /// aresample=async=1 で微小なギャップを吸収することが音ズレ防止の要点
@@ -40,7 +40,7 @@ pub struct VideoEncodeOpts {
 }
 
 impl VideoEncodeOpts {
-    /// プラットフォームと解像度から適切なエンコーダとビットレートを選ぶ
+    /// プラットフォームと解像度から適切なエンコーダとビットレートを選ぶ。
     /// videotoolbox は x264 より同ビットレートでの品質が落ちるため、少し多めに盛る
     pub fn auto(height: Option<u32>) -> Self {
         let encoder = if cfg!(target_os = "macos") {
@@ -61,7 +61,7 @@ impl VideoEncodeOpts {
     }
 }
 
-/// タイムラインの keep_ranges に従って動画をカット・再結合する
+/// タイムラインの keep_ranges に従って動画をカット・再結合する。
 /// 全再エンコードだが、デコードは1回で済み A/V 同期が最も安定する方式
 #[allow(clippy::too_many_arguments)]
 pub fn cut_video(
@@ -90,7 +90,7 @@ pub fn cut_video(
     let args: Vec<String> = vec![
         "-i".into(),
         input.display().to_string(),
-        // "-/opt file" は値をファイルから読む ffmpeg の構文
+        // "-/opt file" は値をファイルから読む ffmpeg の構文。
         // フィルタ式は長尺動画で数百節になり引数の長さ制限を超えうるためファイル渡しにする
         // (旧 -filter_complex_script は ffmpeg 9 で廃止)
         "-/filter_complex".into(),
@@ -139,7 +139,7 @@ impl Default for BgmOpts {
     }
 }
 
-/// BGM ミックス用のフィルタ式を生成する
+/// BGM ミックス用のフィルタ式を生成する。
 ///
 /// - `-stream_loop -1` により BGM は入力段で無限ループしている前提
 /// - amix の duration=first で本編の長さに合わせて終了する
@@ -253,7 +253,7 @@ pub fn measure_loudness(
     parse_loudnorm_json(&stderr)
 }
 
-/// loudnorm は測定結果の JSON を stderr の末尾に出力する
+/// loudnorm は測定結果の JSON を stderr の末尾に出力する。
 /// 他のログと混ざるため、最後の '{' から始まる JSON ブロックを取り出す
 fn parse_loudnorm_json(stderr: &str) -> Result<LoudnessMeasurement> {
     let start = stderr
@@ -267,7 +267,7 @@ fn parse_loudnorm_json(stderr: &str) -> Result<LoudnessMeasurement> {
         .map_err(|e| PaeError::ProbeParse(format!("loudnorm JSON の解析に失敗: {e}")))
 }
 
-/// loudnorm 2パス目: 測定値を使って線形ゲインで正規化する
+/// loudnorm 2パス目: 測定値を使って線形ゲインで正規化する。
 /// linear=true により声質を変えるダイナミック処理を避ける。映像は無劣化コピー
 #[allow(clippy::too_many_arguments)]
 pub fn apply_loudnorm(

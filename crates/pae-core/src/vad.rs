@@ -79,7 +79,7 @@ fn chunk_duration_ms(sample_rate: u32) -> u64 {
     CHUNK_SIZE as u64 * 1000 / sample_rate as u64
 }
 
-/// チャンクごとの発話確率から発話区間を組み立てる
+/// チャンクごとの発話確率から発話区間を組み立てる。
 ///
 /// 1. しきい値にヒステリシスを持たせてチャンクを発話/無音に分類
 ///    （発話開始は threshold、終了は threshold - 0.15。境界でのばたつきを防ぐ）

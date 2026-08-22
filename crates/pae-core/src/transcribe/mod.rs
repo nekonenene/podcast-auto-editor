@@ -83,7 +83,7 @@ impl Transcriber for WhisperTranscriber {
             progress_writer.store(percent, std::sync::atomic::Ordering::Relaxed);
         });
 
-        // キャンセル時は whisper.cpp の処理自体を中断させる
+        // キャンセル時は whisper.cpp の処理自体を中断させる。
         // whisper-rs 0.16 の set_abort_callback_safe はクロージャの二重 Box と
         // trampoline の型が食い違うバグがあり未定義動作になるため、
         // 生ポインタ API に AtomicBool を渡す方式で回避している

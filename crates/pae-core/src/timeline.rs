@@ -1,4 +1,4 @@
-//! VAD の発話区間から編集タイムラインを生成する純粋ロジック
+//! VAD の発話区間から編集タイムラインを生成する純粋ロジック。
 //! I/O を持たないため、ユニットテストで境界値を重点的に検証できる
 
 use std::path::Path;
@@ -50,7 +50,7 @@ fn apply_padding(
         .collect()
 }
 
-/// 重なり・隣接した発話区間をひとつにまとめる
+/// 重なり・隣接した発話区間をひとつにまとめる。
 /// パディングによって隣の区間と接触した場合もここで吸収される
 fn merge_segments(mut segments: Vec<SpeechSegment>) -> Vec<SpeechSegment> {
     segments.sort_by_key(|s| s.start_ms);
@@ -117,8 +117,8 @@ fn build_segments(
     segments
 }
 
-/// 無音ひとつ分の短縮判断
-/// 「削除」はせず、しきい値以上の無音を自然な長さ (target_silence_ms) まで縮める
+/// 無音ひとつ分の短縮判断。
+/// 「削除」はせず、しきい値以上の無音を自然な長さ (target_silence_ms) まで縮める。
 /// 冒頭・末尾の無音は会話の間ではないため、trim_edges 時はしきい値未満でも縮める
 fn decide_silence(start: u64, end: u64, preset: &Preset, is_edge: bool) -> TimelineSegment {
     let len = end - start;
@@ -156,7 +156,7 @@ fn compute_stats(segments: &[TimelineSegment], source_duration_ms: u64) -> Timel
     }
 }
 
-/// タイムラインの不変条件を検証する
+/// タイムラインの不変条件を検証する。
 /// 生成バグや timeline.json の手修正ミスをレンダリング前に検出する
 pub fn validate_timeline(timeline: &EditTimeline) -> Result<()> {
     let mut cursor = 0u64;
@@ -194,7 +194,7 @@ pub fn validate_timeline(timeline: &EditTimeline) -> Result<()> {
     Ok(())
 }
 
-/// タイムラインから「出力に残すソース区間」のリストを導出する
+/// タイムラインから「出力に残すソース区間」のリストを導出する。
 /// Compress する無音は区間の先頭側を残す。直前の発話とつながって
 /// 「発話後の間」として自然に聞こえ、さらに隣接区間とマージできるため
 /// ffmpeg フィルタ式の節数も減らせる
@@ -248,7 +248,7 @@ mod tests {
         .expect("timeline generation should succeed")
     }
 
-    /// 発話に挟まれた無音の action を返すヘルパ
+    /// 発話に挟まれた無音の action を返すヘルパ。
     /// 動画: [speech 0..1000][silence 1000..1000+gap][speech ..+1000]
     fn middle_silence(gap_ms: u64, preset: &Preset) -> TimelineSegment {
         let speech = [seg(0, 1000), seg(1000 + gap_ms, 2000 + gap_ms)];
@@ -287,7 +287,7 @@ mod tests {
         assert_eq!(middle_silence(3010, &p).action, SegmentAction::Compress);
     }
 
-    /// パディング (前150 + 後250 = 400ms) と無音長の関係
+    /// パディング (前150 + 後250 = 400ms) と無音長の関係。
     /// 無音 399/400ms → パディングで埋まり発話がマージされる。401ms → 1ms の無音が残る
     #[test]
     fn padding_collision_merges_segments() {

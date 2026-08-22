@@ -7,8 +7,8 @@ use std::time::Duration;
 use crate::error::{PaeError, Result};
 use crate::progress::CancelToken;
 
-/// ffmpeg / ffprobe の実行を担う
-/// バイナリの場所は 設定での上書き > 環境変数 PAE_FFMPEG_DIR > PATH の順で解決する
+/// ffmpeg / ffprobe の実行を担う。
+/// バイナリの場所は 設定での上書き > 環境変数 PAE_FFMPEG_DIR > PATH の順で解決する。
 /// 将来 Tauri の sidecar に切り替えるときはこの解決部分だけを変更すればよい
 #[derive(Debug, Clone)]
 pub struct Ffmpeg {
@@ -64,7 +64,7 @@ impl Ffmpeg {
         Ok(String::from_utf8_lossy(&output.stdout).into_owned())
     }
 
-    /// ffmpeg を実行する
+    /// ffmpeg を実行する。
     ///
     /// - `expected_output_ms` を渡すと `-progress pipe:1` の out_time_us から
     ///   進捗率を計算して `on_progress` に通知する

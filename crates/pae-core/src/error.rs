@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-/// アプリ全体で使うエラー型
+/// アプリ全体で使うエラー型。
 /// 外部プロセスや外部ライブラリの失敗を握りつぶさず、原因を保持したまま上へ伝える
 #[derive(Debug, thiserror::Error)]
 pub enum PaeError {

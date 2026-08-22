@@ -33,7 +33,7 @@ pub fn extract_analysis_wav(
     Ok(())
 }
 
-/// WAV ファイルを i16 サンプル列として読み込む
+/// WAV ファイルを i16 サンプル列として読み込む。
 /// 60分の 16kHz mono でも約115MB なのでメモリに載せて問題ない
 pub fn read_wav_samples(path: &Path) -> Result<(Vec<i16>, u32)> {
     let mut reader = hound::WavReader::open(path)
