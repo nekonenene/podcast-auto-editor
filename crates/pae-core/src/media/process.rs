@@ -17,8 +17,14 @@ use super::ffmpeg::Ffmpeg;
 ///
 /// `tail_ms` を指定すると末尾に「余韻」を足す。映像は最終フレームの静止
 /// (tpad clone)、音声は無音のパディングで、あとから BGM だけが数秒残って
-/// フェードアウトする Podcast らしいエンディングを作るために使う
-pub fn build_cut_filter_script(keep_ranges_ms: &[(u64, u64)], tail_ms: u64) -> String {
+/// フェードアウトする Podcast らしいエンディングを作るために使う。
+///
+/// `has_video` が false のとき (mp3 や wav などの音声入力) は音声チェーンだけを作る
+pub fn build_cut_filter_script(
+    keep_ranges_ms: &[(u64, u64)],
+    tail_ms: u64,
+    has_video: bool,
+) -> String {
     let expr: Vec<String> = keep_ranges_ms
         .iter()
         .map(|(start, end)| {
@@ -39,10 +45,13 @@ pub fn build_cut_filter_script(keep_ranges_ms: &[(u64, u64)], tail_ms: u64) -> S
     } else {
         (String::new(), String::new())
     };
-    format!(
-        "[0:v]select='{expr}',setpts=N/FRAME_RATE/TB{video_tail}[v];\n\
-         [0:a]aselect='{expr}',asetpts=N/SR/TB,aresample=async=1{audio_tail}[a]\n"
-    )
+    let audio_chain =
+        format!("[0:a]aselect='{expr}',asetpts=N/SR/TB,aresample=async=1{audio_tail}[a]\n");
+    if has_video {
+        format!("[0:v]select='{expr}',setpts=N/FRAME_RATE/TB{video_tail}[v];\n{audio_chain}")
+    } else {
+        audio_chain
+    }
 }
 
 /// 出力動画のエンコード設定
@@ -74,16 +83,18 @@ impl VideoEncodeOpts {
     }
 }
 
-/// タイムラインの keep_ranges に従って動画をカット・再結合する。
-/// 全再エンコードだが、デコードは1回で済み A/V 同期が最も安定する方式
+/// タイムラインの keep_ranges に従って入力をカット・再結合する。
+/// 全再エンコードだが、デコードは1回で済み A/V 同期が最も安定する方式。
+/// 音声のみの入力では音声チェーンだけを処理する (出力は .flac を想定)
 #[allow(clippy::too_many_arguments)]
-pub fn cut_video(
+pub fn cut_media(
     ffmpeg: &Ffmpeg,
     input: &Path,
     keep_ranges_ms: &[(u64, u64)],
     output: &Path,
     output_duration_ms: u64,
     tail_ms: u64,
+    has_video: bool,
     encode: &VideoEncodeOpts,
     on_progress: &mut dyn FnMut(f32),
     cancel: &CancelToken,
@@ -94,14 +105,14 @@ pub fn cut_video(
         ));
     }
 
-    let script = build_cut_filter_script(keep_ranges_ms, tail_ms);
+    let script = build_cut_filter_script(keep_ranges_ms, tail_ms, has_video);
     let script_file = tempfile::Builder::new()
         .prefix("pae-filter-")
         .suffix(".txt")
         .tempfile()?;
     std::fs::write(script_file.path(), &script)?;
 
-    let args: Vec<String> = vec![
+    let mut args: Vec<String> = vec![
         "-i".into(),
         input.display().to_string(),
         // "-/opt file" は値をファイルから読む ffmpeg の構文。
@@ -109,28 +120,38 @@ pub fn cut_video(
         // (旧 -filter_complex_script は ffmpeg 9 で廃止)
         "-/filter_complex".into(),
         script_file.path().display().to_string(),
-        "-map".into(),
-        "[v]".into(),
-        "-map".into(),
-        "[a]".into(),
-        "-c:v".into(),
-        encode.encoder.clone(),
-        "-b:v".into(),
-        encode.bitrate.clone(),
-        "-pix_fmt".into(),
-        "yuv420p".into(),
-        "-fps_mode".into(),
-        "cfr".into(),
-        "-c:a".into(),
-        "aac".into(),
-        "-b:a".into(),
-        "192k".into(),
-        "-ar".into(),
-        "48000".into(),
-        "-movflags".into(),
-        "+faststart".into(),
-        output.display().to_string(),
     ];
+    if has_video {
+        args.extend(
+            [
+                "-map",
+                "[v]",
+                "-map",
+                "[a]",
+                "-c:v",
+                &encode.encoder,
+                "-b:v",
+                &encode.bitrate,
+                "-pix_fmt",
+                "yuv420p",
+                "-fps_mode",
+                "cfr",
+                "-c:a",
+                "aac",
+                "-b:a",
+                "192k",
+                "-ar",
+                "48000",
+                "-movflags",
+                "+faststart",
+            ]
+            .map(String::from),
+        );
+    } else {
+        // 音声のみ: 中間ファイルは可逆の FLAC にして多段エンコードの劣化を避ける
+        args.extend(["-map", "[a]", "-c:a", "flac", "-ar", "48000"].map(String::from));
+    }
+    args.push(output.display().to_string());
     ffmpeg.run(&args, Some(output_duration_ms), on_progress, cancel)
 }
 
@@ -268,6 +289,7 @@ pub fn mix_bgm(
     bgm: &Path,
     output: &Path,
     main_duration_ms: u64,
+    has_video: bool,
     opts: &BgmOpts,
     on_progress: &mut dyn FnMut(f32),
     cancel: &CancelToken,
@@ -276,7 +298,7 @@ pub fn mix_bgm(
         return Err(PaeError::InputNotFound(bgm.to_path_buf()));
     }
     let filter = build_bgm_filter(main_duration_ms, opts);
-    let args: Vec<String> = vec![
+    let mut args: Vec<String> = vec![
         "-i".into(),
         input.display().to_string(),
         "-stream_loop".into(),
@@ -285,22 +307,31 @@ pub fn mix_bgm(
         bgm.display().to_string(),
         "-filter_complex".into(),
         filter,
-        "-map".into(),
-        "0:v?".into(),
-        "-map".into(),
-        "[a]".into(),
-        "-c:v".into(),
-        "copy".into(),
-        "-c:a".into(),
-        "aac".into(),
-        "-b:a".into(),
-        "192k".into(),
-        "-ar".into(),
-        "48000".into(),
-        "-movflags".into(),
-        "+faststart".into(),
-        output.display().to_string(),
     ];
+    if has_video {
+        args.extend(
+            [
+                "-map",
+                "0:v",
+                "-map",
+                "[a]",
+                "-c:v",
+                "copy",
+                "-c:a",
+                "aac",
+                "-b:a",
+                "192k",
+                "-ar",
+                "48000",
+                "-movflags",
+                "+faststart",
+            ]
+            .map(String::from),
+        );
+    } else {
+        args.extend(["-map", "[a]", "-c:a", "flac", "-ar", "48000"].map(String::from));
+    }
+    args.push(output.display().to_string());
     ffmpeg.run(&args, Some(main_duration_ms), on_progress, cancel)
 }
 
@@ -381,6 +412,7 @@ pub fn apply_loudnorm(
     target: &LoudnormTarget,
     measured: &LoudnessMeasurement,
     duration_ms: u64,
+    has_video: bool,
     on_progress: &mut dyn FnMut(f32),
     cancel: &CancelToken,
 ) -> Result<String> {
@@ -395,28 +427,37 @@ pub fn apply_loudnorm(
         measured.input_thresh,
         measured.target_offset,
     );
-    let args: Vec<String> = vec![
+    let mut args: Vec<String> = vec![
         "-i".into(),
         input.display().to_string(),
         "-af".into(),
         filter,
-        "-map".into(),
-        "0:v?".into(),
-        "-map".into(),
-        "0:a".into(),
-        "-c:v".into(),
-        "copy".into(),
-        "-c:a".into(),
-        "aac".into(),
-        "-b:a".into(),
-        "192k".into(),
-        // loudnorm は内部で 192kHz にアップサンプルするため明示的に戻す
-        "-ar".into(),
-        "48000".into(),
-        "-movflags".into(),
-        "+faststart".into(),
-        output.display().to_string(),
     ];
+    if has_video {
+        args.extend(
+            [
+                "-map",
+                "0:v",
+                "-map",
+                "0:a",
+                "-c:v",
+                "copy",
+                "-c:a",
+                "aac",
+                "-b:a",
+                "192k",
+                // loudnorm は内部で 192kHz にアップサンプルするため明示的に戻す
+                "-ar",
+                "48000",
+                "-movflags",
+                "+faststart",
+            ]
+            .map(String::from),
+        );
+    } else {
+        args.extend(["-map", "0:a", "-c:a", "flac", "-ar", "48000"].map(String::from));
+    }
+    args.push(output.display().to_string());
     ffmpeg.run(&args, Some(duration_ms), on_progress, cancel)
 }
 
@@ -448,7 +489,7 @@ mod tests {
 
     #[test]
     fn cut_filter_script_snapshot() {
-        let script = build_cut_filter_script(&[(0, 2200), (5000, 6000)], 0);
+        let script = build_cut_filter_script(&[(0, 2200), (5000, 6000)], 0, true);
         insta::assert_snapshot!(script, @r"
         [0:v]select='between(t,0.000,2.200)+between(t,5.000,6.000)',setpts=N/FRAME_RATE/TB[v];
         [0:a]aselect='between(t,0.000,2.200)+between(t,5.000,6.000)',asetpts=N/SR/TB,aresample=async=1[a]
@@ -457,10 +498,18 @@ mod tests {
 
     #[test]
     fn cut_filter_script_with_ending_tail() {
-        let script = build_cut_filter_script(&[(0, 2200)], 5000);
+        let script = build_cut_filter_script(&[(0, 2200)], 5000, true);
         insta::assert_snapshot!(script, @r"
         [0:v]select='between(t,0.000,2.200)',setpts=N/FRAME_RATE/TB,tpad=stop_duration=5.000:stop_mode=clone[v];
         [0:a]aselect='between(t,0.000,2.200)',asetpts=N/SR/TB,aresample=async=1,apad=pad_dur=5.000[a]
+        ");
+    }
+
+    #[test]
+    fn cut_filter_script_audio_only() {
+        let script = build_cut_filter_script(&[(0, 2200), (5000, 6000)], 3000, false);
+        insta::assert_snapshot!(script, @r"
+        [0:a]aselect='between(t,0.000,2.200)+between(t,5.000,6.000)',asetpts=N/SR/TB,aresample=async=1,apad=pad_dur=3.000[a]
         ");
     }
 

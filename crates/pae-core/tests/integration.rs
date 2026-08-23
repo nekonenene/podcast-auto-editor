@@ -8,7 +8,7 @@ use pae_core::media::extract::{extract_analysis_wav, read_wav_samples};
 use pae_core::media::ffmpeg::Ffmpeg;
 use pae_core::media::probe::probe;
 use pae_core::media::process::{
-    apply_loudnorm, cut_video, measure_loudness, mix_bgm, BgmOpts, LoudnormTarget, VideoEncodeOpts,
+    apply_loudnorm, cut_media, measure_loudness, mix_bgm, BgmOpts, LoudnormTarget, VideoEncodeOpts,
 };
 use pae_core::progress::CancelToken;
 use pae_core::timeline::timeline_to_keep_ranges;
@@ -148,13 +148,14 @@ fn cut_preserves_av_sync_and_tone_positions() {
     assert_eq!(keep_ranges, vec![(0, 3000), (6000, 11000)]);
 
     let output = dir.path().join("cut.mp4");
-    cut_video(
+    cut_media(
         &ffmpeg,
         &input,
         &keep_ranges,
         &output,
         timeline.stats.output_duration_ms,
         0,
+        true,
         &VideoEncodeOpts::auto(Some(240)),
         &mut |_| {},
         &cancel(),
@@ -186,6 +187,82 @@ fn cut_preserves_av_sync_and_tone_positions() {
     }
 }
 
+/// 音声のみの入力 (WAV) でもカットでき、トーン位置がずれないこと
+#[test]
+fn cut_audio_only_input() {
+    let ffmpeg = ffmpeg();
+    let dir = tempfile::tempdir().unwrap();
+
+    // 動画版と同じトーンパターンの WAV を作る
+    let input = dir.path().join("tone.wav");
+    let args: Vec<String> = [
+        "-f",
+        "lavfi",
+        "-i",
+        "sine=440:d=2",
+        "-f",
+        "lavfi",
+        "-i",
+        "anullsrc=r=44100:cl=mono:d=4",
+        "-f",
+        "lavfi",
+        "-i",
+        "sine=880:d=2",
+        "-f",
+        "lavfi",
+        "-i",
+        "anullsrc=r=44100:cl=mono:d=1",
+        "-f",
+        "lavfi",
+        "-i",
+        "sine=440:d=2",
+        "-filter_complex",
+        "[0][1][2][3][4]concat=n=5:v=0:a=1[a]",
+        "-map",
+        "[a]",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .chain([input.display().to_string()])
+    .collect();
+    ffmpeg.run(&args, None, &mut |_| {}, &cancel()).unwrap();
+
+    let timeline = tone_timeline(&input);
+    let keep_ranges = timeline_to_keep_ranges(&timeline);
+    let output = dir.path().join("cut.flac");
+    cut_media(
+        &ffmpeg,
+        &input,
+        &keep_ranges,
+        &output,
+        timeline.stats.output_duration_ms,
+        0,
+        false,
+        &VideoEncodeOpts::auto(None),
+        &mut |_| {},
+        &cancel(),
+    )
+    .unwrap();
+
+    let info = probe(&ffmpeg, &output).unwrap();
+    assert!(!info.has_video);
+    assert!(
+        (info.duration_ms as i64 - 8000).abs() < 100,
+        "出力の長さが期待とずれています: {}ms",
+        info.duration_ms
+    );
+
+    let transitions = detect_transitions(&ffmpeg, &output, info.duration_ms);
+    let expected = [2000u64, 3000, 5000, 6000];
+    assert_eq!(transitions.len(), expected.len(), "遷移: {transitions:?}");
+    for (actual, expected) in transitions.iter().zip(expected.iter()) {
+        assert!(
+            (*actual as i64 - *expected as i64).abs() <= 100,
+            "トーン遷移位置がずれています: {actual}ms (期待 {expected}ms)"
+        );
+    }
+}
+
 #[test]
 fn bgm_mix_keeps_main_duration() {
     let ffmpeg = ffmpeg();
@@ -208,6 +285,7 @@ fn bgm_mix_keeps_main_duration() {
         &bgm,
         &output,
         11_000,
+        true,
         &BgmOpts::default(),
         &mut |_| {},
         &cancel(),
@@ -271,6 +349,7 @@ fn loudnorm_reaches_target() {
         &target,
         &measured,
         5_000,
+        true,
         &mut |_| {},
         &cancel(),
     )

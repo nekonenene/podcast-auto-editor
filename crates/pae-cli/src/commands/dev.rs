@@ -9,7 +9,7 @@ use pae_core::media::extract::{extract_analysis_wav, read_wav_samples};
 use pae_core::media::ffmpeg::Ffmpeg;
 use pae_core::media::probe::probe;
 use pae_core::media::process::{
-    apply_loudnorm, cut_video, measure_loudness, mix_bgm, BgmOpts, LoudnormTarget, VideoEncodeOpts,
+    apply_loudnorm, cut_media, measure_loudness, mix_bgm, BgmOpts, LoudnormTarget, VideoEncodeOpts,
 };
 use pae_core::progress::CancelToken;
 use pae_core::timeline::{timeline_to_keep_ranges, validate_timeline};
@@ -100,13 +100,14 @@ pub fn execute(args: DevArgs) -> anyhow::Result<()> {
             let ranges = timeline_to_keep_ranges(&timeline);
             let info = probe(&ffmpeg, &input)?;
             println!("keep ranges: {} 個", ranges.len());
-            cut_video(
+            cut_media(
                 &ffmpeg,
                 &input,
                 &ranges,
                 &output,
                 timeline.stats.output_duration_ms,
                 0,
+                info.has_video,
                 &VideoEncodeOpts::auto(info.height),
                 &mut print_progress,
                 &cancel,
@@ -186,6 +187,7 @@ pub fn execute(args: DevArgs) -> anyhow::Result<()> {
                 &bgm,
                 &output,
                 info.duration_ms,
+                info.has_video,
                 &opts,
                 &mut print_progress,
                 &cancel,
@@ -215,6 +217,7 @@ pub fn execute(args: DevArgs) -> anyhow::Result<()> {
                 &target,
                 &measured,
                 info.duration_ms,
+                info.has_video,
                 &mut print_progress,
                 &cancel,
             )?;

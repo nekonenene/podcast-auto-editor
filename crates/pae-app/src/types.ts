@@ -124,7 +124,7 @@ export const STAGE_LABELS: Record<Stage, string> = {
   extract_audio: "音声抽出",
   vad: "無音検出",
   timeline: "編集タイムライン生成",
-  render_video: "動画編集",
+  render_video: "カット編集",
   mix_bgm: "BGM追加",
   loudnorm: "音量調整",
   render_mp3: "MP3出力",

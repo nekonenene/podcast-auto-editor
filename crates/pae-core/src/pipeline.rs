@@ -12,7 +12,7 @@ use crate::media::extract::{extract_analysis_wav, read_wav_samples};
 use crate::media::ffmpeg::Ffmpeg;
 use crate::media::probe::probe;
 use crate::media::process::{
-    apply_loudnorm, cut_video, encode_mp3, measure_loudness, mix_bgm, BgmOpts, LoudnormTarget,
+    apply_loudnorm, cut_media, encode_mp3, measure_loudness, mix_bgm, BgmOpts, LoudnormTarget,
     VideoEncodeOpts,
 };
 use crate::output::render;
@@ -221,16 +221,30 @@ pub fn run_job(spec: &JobSpec, sink: &dyn ProgressSink, cancel: &CancelToken) ->
     let keep_ranges = timeline_to_keep_ranges(&timeline);
     let encode = VideoEncodeOpts::auto(info.height);
 
-    // カット → (BGM) → loudnorm と進み、最終 MP4 を作る
-    let cut_path = temp_dir.path().join("cut.mp4");
+    // 音声のみの入力 (mp3 / wav 等) では動画を作れないため、
+    // 中間ファイルを可逆の FLAC にして音声だけのパイプラインで処理する
+    let has_video = info.has_video;
+    let intermediate_ext = if has_video { "mp4" } else { "flac" };
+    if !has_video && spec.outputs.edited_mp4 {
+        tracing::info!("入力に映像がないため、編集済み MP4 の出力はスキップします");
+    }
+    if !has_video && !spec.outputs.podcast_mp3 && !spec.outputs.timeline_json && !want_transcribe {
+        return Err(PaeError::Config(
+            "音声入力では編集済み MP4 を出力できません。MP3 や文字起こしなど他の出力を選択してください".into(),
+        ));
+    }
+
+    // カット → (BGM) → loudnorm と進み、完成版を作る
+    let cut_path = temp_dir.path().join(format!("cut.{intermediate_ext}"));
     runner.run(Stage::RenderVideo, |p| {
-        cut_video(
+        cut_media(
             &ffmpeg,
             &spec.input,
             &keep_ranges,
             &cut_path,
             output_ms,
             tail_ms,
+            has_video,
             &encode,
             p,
             cancel,
@@ -238,7 +252,7 @@ pub fn run_job(spec: &JobSpec, sink: &dyn ProgressSink, cancel: &CancelToken) ->
     })?;
 
     let mixed_path = if let Some(bgm) = &spec.bgm {
-        let mixed = temp_dir.path().join("mixed.mp4");
+        let mixed = temp_dir.path().join(format!("mixed.{intermediate_ext}"));
         runner.run(Stage::MixBgm, |p| {
             mix_bgm(
                 &ffmpeg,
@@ -246,6 +260,7 @@ pub fn run_job(spec: &JobSpec, sink: &dyn ProgressSink, cancel: &CancelToken) ->
                 bgm,
                 &mixed,
                 output_ms,
+                has_video,
                 &spec.bgm_opts,
                 p,
                 cancel,
@@ -261,10 +276,11 @@ pub fn run_job(spec: &JobSpec, sink: &dyn ProgressSink, cancel: &CancelToken) ->
         ..LoudnormTarget::default()
     };
     // MP4 を出力しない設定でも、MP3 や文字起こしの元として完成版は一時的に作る
-    let edited_path = if spec.outputs.edited_mp4 {
+    let write_edited_mp4 = spec.outputs.edited_mp4 && has_video;
+    let edited_path = if write_edited_mp4 {
         output_path(&spec.output_dir, &spec.input, "edited", "mp4")
     } else {
-        temp_dir.path().join("edited.mp4")
+        temp_dir.path().join(format!("edited.{intermediate_ext}"))
     };
     runner.run(Stage::Loudnorm, |p| {
         let measured = measure_loudness(&ffmpeg, &mixed_path, &target, cancel)?;
@@ -276,11 +292,12 @@ pub fn run_job(spec: &JobSpec, sink: &dyn ProgressSink, cancel: &CancelToken) ->
             &target,
             &measured,
             output_ms,
+            has_video,
             p,
             cancel,
         )
     })?;
-    if spec.outputs.edited_mp4 {
+    if write_edited_mp4 {
         outputs.push(edited_path.clone());
     }
 

@@ -28,7 +28,7 @@ impl Stage {
             Stage::ExtractAudio => "音声抽出",
             Stage::Vad => "無音検出",
             Stage::Timeline => "編集タイムライン生成",
-            Stage::RenderVideo => "動画編集",
+            Stage::RenderVideo => "カット編集",
             Stage::MixBgm => "BGM追加",
             Stage::Loudnorm => "音量調整",
             Stage::RenderMp3 => "MP3出力",

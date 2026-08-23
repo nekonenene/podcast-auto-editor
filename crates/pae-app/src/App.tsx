@@ -111,7 +111,8 @@ function App() {
     }
   }, []);
 
-  // ウィンドウへのドラッグ&ドロップ。動画は入力、音声ファイルは BGM として扱う。
+  // ウィンドウへのドラッグ&ドロップ。動画は常に入力として扱い、
+  // 音声ファイルは「入力が未設定なら入力、設定済みなら BGM」と解釈する。
   // Tauri 外 (通常ブラウザでの表示確認時) では webview API が無いためスキップする
   useEffect(() => {
     if (!("__TAURI_INTERNALS__" in window)) return;
@@ -122,19 +123,28 @@ function App() {
         if (VIDEO_EXTENSIONS.includes(ext)) {
           void chooseVideo(path);
         } else if (AUDIO_EXTENSIONS.includes(ext)) {
-          setBgm(path);
+          if (video === null) {
+            void chooseVideo(path);
+          } else {
+            setBgm(path);
+          }
         }
       }
     });
     return () => {
       void unlisten.then((fn) => fn());
     };
-  }, [chooseVideo]);
+  }, [chooseVideo, video]);
 
   const selectVideo = async () => {
     const path = await open({
       multiple: false,
-      filters: [{ name: "動画", extensions: VIDEO_EXTENSIONS }],
+      filters: [
+        {
+          name: "動画・音声",
+          extensions: [...VIDEO_EXTENSIONS, ...AUDIO_EXTENSIONS],
+        },
+      ],
     });
     if (typeof path === "string") await chooseVideo(path);
   };
@@ -358,15 +368,21 @@ function App() {
 
       <section className="form" aria-disabled={running}>
         <div className="field">
-          <label>動画</label>
+          <label>動画・音声</label>
           <button className="picker" onClick={selectVideo} disabled={running}>
             {video ? fileName(video) : "クリックして選択 (ドラッグ&ドロップ可)"}
           </button>
-          {videoInfo && (
+          {videoInfo && videoInfo.has_video && (
             <p className="hint">
               {formatDuration(videoInfo.duration_ms)} ・ {videoInfo.width}x
               {videoInfo.height} ・ {videoInfo.video_codec}/
               {videoInfo.audio_codec}
+            </p>
+          )}
+          {videoInfo && !videoInfo.has_video && (
+            <p className="hint">
+              {formatDuration(videoInfo.duration_ms)} ・ 音声のみ (
+              {videoInfo.audio_codec}) ・ MP4 の代わりに MP3 が出力されます
             </p>
           )}
         </div>
