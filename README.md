@@ -76,6 +76,8 @@ input-timeline.json   編集タイムライン (手修正して再利用可)
 --no-bgm            BGM を付けない
 --bgm-volume 0.15   BGM 音量 (会話に対する倍率)
 --fade-in / --fade-out  BGM のフェード時間 (秒)
+--ending-tail 5     会話終了後に BGM だけを残す余韻 (秒, 0 で無効)
+--bgm-duck -4       声の帯域で BGM を下げる量 (dB, 0 で無効)
 --lufs -16          ラウドネスターゲット
 --model <name>      文字起こしモデル (pae models list で一覧)
 --skip-transcribe   文字起こしを省略

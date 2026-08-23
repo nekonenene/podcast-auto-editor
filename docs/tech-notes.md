@@ -77,17 +77,14 @@ threshold 0.4 / min_speech 100ms / min_silence 250ms / padding 前150ms・後250
 | Silero VAD (モデル含む) | MIT |
 | voice_activity_detector / ort | MIT / Apache 2.0 |
 
-## 将来の品質改善アイデア (聴感評価より)
+## 聴感評価からの品質改善 (実装済み)
 
-Phase 4 / GUI 設定として検討する。実装時期未定:
-
-- **声の帯域の EQ 分離**: 話者の声の中心帯域 (目安 1〜4kHz) を軽くブーストし、
-  BGM 側の同帯域をカットすると聞き取りやすくなる。ffmpeg の `equalizer` /
-  `firequalizer` フィルタで実現できる。BGM 側だけの処理なら声質を変えないので安全
-- **エンディングの BGM 余韻**: 現在は本編終了と同時にフェードアウトが終わる。
-  会話終了後に BGM だけが数秒残ってからフェードアウトすると Podcast らしくなる。
-  amix の duration=first をやめて本編音声側に無音を数秒パディングする構成になる
-- どちらも GUI の設定項目にできる (EQ の ON/OFF・エンディング余韻の秒数)
+- **声の帯域の EQ 分離**: BGM 側だけ `equalizer=f=2500:width_type=o:w=2` で
+  声の中心帯域を下げる (`voice_duck_db`, デフォルト -4dB, 0 で無効)。
+  声側は加工しない
+- **エンディングの BGM 余韻**: カット段階で映像の最終フレーム静止 (tpad) と
+  音声の無音パディング (apad) を末尾に足し、BGM のフェードアウトを
+  その余韻に重ねる (`ending_tail_s`, デフォルト5秒, BGM なしなら付かない)
 
 ## ベンチマーク実測 (M系 Apple Silicon, 2026-08)
 
