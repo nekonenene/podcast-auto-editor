@@ -335,17 +335,8 @@ pub fn cancel_job(state: State<'_, JobState>) {
     }
 }
 
-/// Finder でファイルを表示する (macOS)。他 OS は将来対応
+/// ファイルマネージャー (macOS は Finder、Windows はエクスプローラー) でファイルを表示する
 #[tauri::command]
 pub fn reveal_path(path: PathBuf) -> Result<(), String> {
-    if cfg!(target_os = "macos") {
-        std::process::Command::new("open")
-            .arg("-R")
-            .arg(&path)
-            .spawn()
-            .map_err(|e| e.to_string())?;
-        Ok(())
-    } else {
-        Err("このOSではまだ対応していません".to_string())
-    }
+    tauri_plugin_opener::reveal_item_in_dir(&path).map_err(|e| e.to_string())
 }
