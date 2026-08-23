@@ -41,7 +41,7 @@ brew install ffmpeg cmake
 ## デスクトップアプリの起動
 
 ```bash
-make setup   # 初回のみ (npm install)
+make up  # 初回のみ (npm install)
 make run-dev
 ```
 
