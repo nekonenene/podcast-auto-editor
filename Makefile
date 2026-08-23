@@ -14,6 +14,10 @@ up: ## 開発環境の準備 (GUI の npm 依存をインストールする)
 run-dev: ## デスクトップアプリを開発モードで起動する
 	cd crates/pae-app && npm run tauri dev
 
+.PHONY: run-dev-cuda
+run-dev-cuda: ## CUDA 有効でデスクトップアプリを起動する (要 NVIDIA GPU + CUDA Toolkit)
+	cd crates/pae-app && npm run tauri -- dev --features cuda
+
 .PHONY: build
 build: ## ワークスペース全体をビルドする
 	cargo build

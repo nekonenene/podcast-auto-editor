@@ -8,6 +8,10 @@ license.workspace = true
 name = "pae"
 path = "src/main.rs"
 
+[features]
+# 文字起こしの CUDA 対応 (要 CUDA Toolkit)。pae-core へそのまま渡す
+cuda = ["pae-core/cuda"]
+
 [dependencies]
 pae-core = { path = "../pae-core" }
 serde.workspace = true

@@ -10,6 +10,10 @@ description = "Podcast Auto Editor"
 name = "pae_app_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+[features]
+# 文字起こしの CUDA 対応 (要 CUDA Toolkit)。pae-core へそのまま渡す
+cuda = ["pae-core/cuda"]
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 

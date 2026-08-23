@@ -27,5 +27,10 @@ ureq = "3"
 [target.'cfg(target_os = "macos")'.dependencies]
 whisper-rs = { version = "0.16", features = ["metal"] }
 
+[features]
+# NVIDIA GPU で文字起こしを高速化する (Windows / Linux 向け)。
+# ビルドに CUDA Toolkit が必要なため、既定では無効の opt-in にしている
+cuda = ["whisper-rs/cuda"]
+
 [dev-dependencies]
 insta = "1"
