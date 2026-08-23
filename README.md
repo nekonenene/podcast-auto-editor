@@ -1,29 +1,30 @@
 # Podcast Auto Editor
 
-Google Meet などで録画したポッドキャスト動画（または mp3 / wav などの音声ファイル）を入れると、
+Google Meet などで録画したポッドキャスト動画（もしくは音声ファイル）を入れると、
 
 1. 長すぎる無音を「自然な長さ」に短縮し（削除ではなく短縮です）
 2. BGM をループ・フェード付きで追加し
-3. 音量を Podcast 向けに調整し（-16 LUFS）
+3. 音量をポッドキャスト向けに調整し（-16 LUFS）
 4. 日本語をローカルで文字起こしして
 
-編集済み MP4 / Podcast 用 MP3 / 文字起こし (TXT・JSON・SRT・Markdown) を出力するツールです。
-音声のみの入力では MP4 の代わりに MP3 が完成品になります。
-出力するファイルは GUI の設定画面（右上の歯車）で選べます。
+編集済み MP4 / ポッドキャスト用 MP3 / 文字起こし (TXT・JSON・SRT・Markdown) を出力するツールです。  
+出力するファイルは GUI 右上の歯車から進める設定画面で選べます。
 
-動画・音声・文字起こしデータを外部サーバーへ送信せず、完全ローカル・無料で動作します
-（文字起こしモデルの初回ダウンロードのみネットワークを使います）。
+動画・音声・文字起こしデータを外部サーバーへ送信せず、完全ローカル・無料で動作します。  
+
+<p align="center">
+  <img src="./docs/images/SS.png" height="600px" alt="アプリケーションのスクリーンショット" />
+</p>
 
 ## 対応 OS
 
-- macOS (Apple Silicon) — 最優先で対応
-- Windows — 将来対応予定の構成にしています
+- macOS (Apple Silicon) — 対応
+- Windows — 未対応。将来対応予定の構成にしています
 
 ## 現在の状態
 
-CLI とデスクトップ GUI (Tauri 2) が動作します。
-FFmpeg の sidecar 同梱・アプリ配布用ビルドは今後対応予定です
-（現時点では ffmpeg を別途インストールする必要があります）。
+CLI とデスクトップ GUI (Tauri 2) が動作します。  
+FFmpeg の sidecar 同梱・アプリ配布用ビルドは今後対応予定です。
 
 ## 必要な開発環境
 
@@ -45,9 +46,9 @@ npm install
 npm run tauri dev
 ```
 
-動画をウィンドウへドラッグ＆ドロップ（またはクリックで選択）し、
-「編集開始」を押すだけで Podcast 一式が生成されます。
-BGM・音量・プリセットなどの設定は自動で保存され、次回のデフォルトになります。
+動画をウィンドウへドラッグ＆ドロップ（またはクリックで選択）し、  
+「編集開始」を押すだけですべて生成されます。  
+BGM・音量・プリセットなどの設定は保存され、次回のデフォルトになります。
 
 ## ビルドと実行
 
@@ -62,7 +63,7 @@ cargo run -p pae-cli -- run input.mp4 --bgm bgm.mp3 -o output
 
 ```text
 input-edited.mp4      編集済み動画 (BGM・音量調整込み)
-input-podcast.mp3     Podcast 用音声
+input-podcast.mp3     ポッドキャスト用音声
 input-transcript.txt  文字起こし
 input-transcript.json タイムスタンプ付き文字起こし
 input-transcript.srt  字幕
@@ -97,7 +98,7 @@ cargo run -p pae-cli -- render input.mp4 -t timeline.json -o output
 
 ### 文字起こしモデル
 
-初回利用時に自動でダウンロードされ、
+初回利用時に自動でダウンロードされ、  
 `~/Library/Application Support/net.hatone.PodcastAutoEditor/models/` に保存されます。
 
 ```bash
@@ -126,17 +127,18 @@ cargo clippy --all-targets
 
 ## FFmpeg の扱い
 
-開発中は PATH 上の ffmpeg / ffprobe を使います（環境変数 `PAE_FFMPEG_DIR` で
-ディレクトリを指定して上書きできます）。
-配布時には LGPL 構成の ffmpeg を sidecar として同梱する予定です。
+開発中は PATH 上の ffmpeg / ffprobe を使います。  
+（環境変数 `PAE_FFMPEG_DIR` でディレクトリを指定して上書きできます）
+
+配布は予定していませんが、その場合は LGPL 構成の ffmpeg を sidecar として同梱する予定です。  
 詳細は [docs/tech-notes.md](docs/tech-notes.md) を参照してください。
 
 ## 設定ファイル
 
-`~/Library/Application Support/net.hatone.PodcastAutoEditor/config.toml` に保存されます。
+`~/Library/Application Support/net.hatone.PodcastAutoEditor/config.toml` に保存されます。  
 デフォルト BGM・音量・プリセット・モデルなどを記憶します。
 
 ## 処理時間の目安
 
-Apple Silicon で入力実時間の 0.2〜0.25 倍程度です（60分動画で約13分）。
+Apple Silicon で入力実時間の 0.2〜0.25 倍程度です。（60分動画で約13分）  
 各実行の最後にステージ別の処理時間と real-time factor が表示されます。
