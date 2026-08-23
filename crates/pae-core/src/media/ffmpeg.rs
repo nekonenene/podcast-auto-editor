@@ -32,15 +32,29 @@ impl Ffmpeg {
         }
 
         // PATH → よくあるインストール先の順で探す。
-        // GUI アプリは Finder から起動されるとシェルの PATH を継承しないため、
+        // macOS の GUI アプリは Finder から起動されるとシェルの PATH を継承しないため、
         // Homebrew などの標準的な場所へのフォールバックが必要
         let mut candidates = vec![Self {
             ffmpeg: PathBuf::from("ffmpeg"),
             ffprobe: PathBuf::from("ffprobe"),
         }];
-        for dir in ["/opt/homebrew/bin", "/usr/local/bin"] {
-            let dir = Path::new(dir);
+        let mut fallback_dirs: Vec<PathBuf> = Vec::new();
+        if cfg!(target_os = "macos") {
+            fallback_dirs.push(PathBuf::from("/opt/homebrew/bin"));
+            fallback_dirs.push(PathBuf::from("/usr/local/bin"));
+        }
+        if cfg!(windows) {
+            // winget はシンボリックリンクを Links に集約する
+            if let Some(local) = std::env::var_os("LOCALAPPDATA") {
+                fallback_dirs.push(PathBuf::from(local).join(r"Microsoft\WinGet\Links"));
+            }
+            fallback_dirs.push(PathBuf::from(r"C:\ProgramData\chocolatey\bin"));
+            fallback_dirs.push(PathBuf::from(r"C:\ffmpeg\bin"));
+            fallback_dirs.push(PathBuf::from(r"C:\Program Files\ffmpeg\bin"));
+        }
+        for dir in fallback_dirs {
             candidates.push(Self {
+                // 拡張子なしでも Windows では .exe が自動補完される
                 ffmpeg: dir.join("ffmpeg"),
                 ffprobe: dir.join("ffprobe"),
             });
