@@ -54,11 +54,14 @@ pub struct ModelManager {
 }
 
 impl ModelManager {
-    /// OS の慣習に従った場所 (macOS: ~/Library/Application Support) を使う
+    /// OS の慣習に従った場所を使う。
+    /// macOS: ~/Library/Application Support、Windows: %LOCALAPPDATA%。
+    /// モデルは 500MB を超えるため、Windows ではログオン時に同期される
+    /// Roaming (data_dir) を避けて Local に置く
     pub fn new() -> Result<Self> {
         let dirs = directories::ProjectDirs::from("net", "hatone", "PodcastAutoEditor")
             .ok_or_else(|| PaeError::Config("ホームディレクトリが見つかりません".into()))?;
-        let models_dir = dirs.data_dir().join("models");
+        let models_dir = dirs.data_local_dir().join("models");
         Ok(Self { models_dir })
     }
 
