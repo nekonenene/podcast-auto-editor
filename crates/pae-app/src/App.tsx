@@ -1,0 +1,369 @@
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { Channel, invoke } from "@tauri-apps/api/core";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { open } from "@tauri-apps/plugin-dialog";
+import type {
+  AppConfig,
+  JobResult,
+  MediaInfo,
+  ModelInfo,
+  ProgressEvent,
+  Stage,
+} from "./types";
+import { STAGE_LABELS, STAGE_ORDER } from "./types";
+import "./App.css";
+
+const VIDEO_EXTENSIONS = ["mp4", "mov", "m4v", "webm", "mkv"];
+const AUDIO_EXTENSIONS = ["mp3", "wav", "m4a", "aac", "flac"];
+
+type UiPhase = "idle" | "running" | "done" | "error";
+
+function formatDuration(ms: number): string {
+  const total = Math.round(ms / 1000);
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  return `${m}分${String(s).padStart(2, "0")}秒`;
+}
+
+function fileName(path: string): string {
+  return path.split("/").pop() ?? path;
+}
+
+function parentDir(path: string): string {
+  const index = path.lastIndexOf("/");
+  return index > 0 ? path.slice(0, index) : path;
+}
+
+function extensionOf(path: string): string {
+  return path.split(".").pop()?.toLowerCase() ?? "";
+}
+
+function App() {
+  const [video, setVideo] = useState<string | null>(null);
+  const [videoInfo, setVideoInfo] = useState<MediaInfo | null>(null);
+  const [bgm, setBgm] = useState<string | null>(null);
+  const [preset, setPreset] = useState("natural");
+  const [bgmVolume, setBgmVolume] = useState(0.15);
+  const [transcribe, setTranscribe] = useState(true);
+  const [model, setModel] = useState("large-v3-turbo");
+  const [models, setModels] = useState<ModelInfo[]>([]);
+  const [outputDir, setOutputDir] = useState<string | null>(null);
+  const [fadeInS, setFadeInS] = useState(2.0);
+  const [fadeOutS, setFadeOutS] = useState(4.0);
+
+  const [phase, setPhase] = useState<UiPhase>("idle");
+  const [progress, setProgress] = useState<ProgressEvent | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<JobResult | null>(null);
+
+  // 起動時に保存済み設定とモデル一覧を読み込む
+  useEffect(() => {
+    invoke<AppConfig>("get_config")
+      .then((config) => {
+        setBgm(config.default_bgm);
+        setPreset(config.preset);
+        setBgmVolume(config.bgm.volume);
+        setFadeInS(config.bgm.fade_in_s);
+        setFadeOutS(config.bgm.fade_out_s);
+        setTranscribe(config.transcribe);
+        setModel(config.model);
+        setOutputDir(config.output_dir);
+      })
+      .catch((e) => setError(String(e)));
+    invoke<ModelInfo[]>("list_models")
+      .then(setModels)
+      .catch(() => setModels([]));
+  }, []);
+
+  const chooseVideo = useCallback(async (path: string) => {
+    setError(null);
+    setResult(null);
+    setPhase("idle");
+    setVideo(path);
+    setVideoInfo(null);
+    // 出力先が未設定なら、動画と同じ場所の podcast-output をデフォルトにする
+    setOutputDir((current) => current ?? `${parentDir(path)}/podcast-output`);
+    try {
+      setVideoInfo(await invoke<MediaInfo>("probe_media", { path }));
+    } catch (e) {
+      setError(String(e));
+      setVideo(null);
+    }
+  }, []);
+
+  // ウィンドウへのドラッグ&ドロップ。動画は入力、音声ファイルは BGM として扱う。
+  // Tauri 外 (通常ブラウザでの表示確認時) では webview API が無いためスキップする
+  useEffect(() => {
+    if (!("__TAURI_INTERNALS__" in window)) return;
+    const unlisten = getCurrentWebview().onDragDropEvent((event) => {
+      if (event.payload.type !== "drop") return;
+      for (const path of event.payload.paths) {
+        const ext = extensionOf(path);
+        if (VIDEO_EXTENSIONS.includes(ext)) {
+          void chooseVideo(path);
+        } else if (AUDIO_EXTENSIONS.includes(ext)) {
+          setBgm(path);
+        }
+      }
+    });
+    return () => {
+      void unlisten.then((fn) => fn());
+    };
+  }, [chooseVideo]);
+
+  const selectVideo = async () => {
+    const path = await open({
+      multiple: false,
+      filters: [{ name: "動画", extensions: VIDEO_EXTENSIONS }],
+    });
+    if (typeof path === "string") await chooseVideo(path);
+  };
+
+  const selectBgm = async () => {
+    const path = await open({
+      multiple: false,
+      filters: [{ name: "音声", extensions: AUDIO_EXTENSIONS }],
+    });
+    if (typeof path === "string") setBgm(path);
+  };
+
+  const selectOutputDir = async () => {
+    const path = await open({ directory: true });
+    if (typeof path === "string") setOutputDir(path);
+  };
+
+  const start = async () => {
+    if (!video || !outputDir) return;
+    setPhase("running");
+    setError(null);
+    setResult(null);
+    setProgress(null);
+
+    const onProgress = new Channel<ProgressEvent>();
+    onProgress.onmessage = (event) => setProgress(event);
+
+    try {
+      const jobResult = await invoke<JobResult>("start_job", {
+        request: {
+          input: video,
+          outputDir,
+          bgm,
+          bgmVolume,
+          fadeInS,
+          fadeOutS,
+          preset,
+          transcribe,
+          model,
+        },
+        onProgress,
+      });
+      setResult(jobResult);
+      setPhase("done");
+    } catch (e) {
+      setError(String(e));
+      setPhase(String(e).includes("キャンセル") ? "idle" : "error");
+    }
+  };
+
+  const cancel = () => {
+    void invoke("cancel_job");
+  };
+
+  const reveal = (path: string) => {
+    void invoke("reveal_path", { path });
+  };
+
+  // この実行で通るステージだけをチェックリストに出す
+  const activeStages = useMemo(() => {
+    return STAGE_ORDER.filter((stage) => {
+      if (stage === "mix_bgm") return bgm !== null;
+      if (stage === "transcribe" || stage === "write_outputs") return transcribe;
+      return true;
+    });
+  }, [bgm, transcribe]);
+
+  const currentStageIndex = progress
+    ? activeStages.indexOf(progress.stage)
+    : -1;
+
+  const selectedModel = models.find((m) => m.name === model);
+  const running = phase === "running";
+
+  return (
+    <main className="container">
+      <h1>Podcast Auto Editor</h1>
+
+      <section className="form" aria-disabled={running}>
+        <div className="field">
+          <label>動画</label>
+          <button className="picker" onClick={selectVideo} disabled={running}>
+            {video ? fileName(video) : "クリックして選択 (ドラッグ&ドロップ可)"}
+          </button>
+          {videoInfo && (
+            <p className="hint">
+              {formatDuration(videoInfo.duration_ms)} ・ {videoInfo.width}x
+              {videoInfo.height} ・ {videoInfo.video_codec}/
+              {videoInfo.audio_codec}
+            </p>
+          )}
+        </div>
+
+        <div className="field">
+          <label>BGM</label>
+          <div className="row">
+            <button className="picker" onClick={selectBgm} disabled={running}>
+              {bgm ? fileName(bgm) : "BGM を選択 (なしでも可)"}
+            </button>
+            {bgm && (
+              <button
+                className="clear"
+                onClick={() => setBgm(null)}
+                disabled={running}
+                title="BGM を外す"
+              >
+                ×
+              </button>
+            )}
+          </div>
+        </div>
+
+        {bgm && (
+          <div className="field">
+            <label>BGM 音量: {(bgmVolume * 100).toFixed(0)}%</label>
+            <input
+              type="range"
+              min="0.03"
+              max="0.5"
+              step="0.01"
+              value={bgmVolume}
+              onChange={(e) => setBgmVolume(Number(e.target.value))}
+              disabled={running}
+            />
+          </div>
+        )}
+
+        <div className="field">
+          <label>無音処理</label>
+          <select
+            value={preset}
+            onChange={(e) => setPreset(e.target.value)}
+            disabled={running}
+          >
+            <option value="natural">Natural — 自然な間を多めに残す</option>
+            <option value="standard">Standard — 通常の Podcast 編集</option>
+            <option value="aggressive">Aggressive — テンポ重視</option>
+          </select>
+        </div>
+
+        <div className="field">
+          <label className="row">
+            <input
+              type="checkbox"
+              checked={transcribe}
+              onChange={(e) => setTranscribe(e.target.checked)}
+              disabled={running}
+            />
+            文字起こし
+          </label>
+          {transcribe && (
+            <>
+              <select
+                value={model}
+                onChange={(e) => setModel(e.target.value)}
+                disabled={running}
+              >
+                {models.map((m) => (
+                  <option key={m.name} value={m.name}>
+                    {m.name} — {m.description}
+                  </option>
+                ))}
+              </select>
+              {selectedModel && !selectedModel.downloaded && (
+                <p className="hint">
+                  初回に約{selectedModel.approxSizeMb}MB
+                  のモデルを自動ダウンロードします
+                </p>
+              )}
+            </>
+          )}
+        </div>
+
+        <div className="field">
+          <label>出力先</label>
+          <button className="picker" onClick={selectOutputDir} disabled={running}>
+            {outputDir ?? "フォルダを選択"}
+          </button>
+        </div>
+      </section>
+
+      {error && <div className="error">{error}</div>}
+
+      {!running && (
+        <button
+          className="start"
+          onClick={start}
+          disabled={!video || !outputDir || !videoInfo}
+        >
+          編集開始
+        </button>
+      )}
+
+      {running && (
+        <section className="progress">
+          <ul>
+            {activeStages.map((stage, index) => {
+              const state =
+                index < currentStageIndex
+                  ? "done"
+                  : index === currentStageIndex
+                    ? "active"
+                    : "pending";
+              return (
+                <li key={stage} className={state}>
+                  <span className="stage-name">
+                    {state === "done" ? "✓" : state === "active" ? "▶" : "・"}{" "}
+                    {STAGE_LABELS[stage as Stage]}
+                  </span>
+                  {state === "active" && progress?.fraction != null && (
+                    <span className="percent">
+                      {Math.round(progress.fraction * 100)}%
+                    </span>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+          {progress?.message && <p className="hint">{progress.message}</p>}
+          <button className="cancel" onClick={cancel}>
+            キャンセル
+          </button>
+        </section>
+      )}
+
+      {phase === "done" && result && (
+        <section className="result">
+          <h2>完成しました 🎉</h2>
+          <p>
+            {formatDuration(result.sourceDurationMs)} →{" "}
+            {formatDuration(result.outputDurationMs)}（
+            {(
+              100 *
+              (1 - result.outputDurationMs / result.sourceDurationMs)
+            ).toFixed(1)}
+            % 短縮）・処理 {Math.round(result.totalSeconds)}秒
+          </p>
+          <ul className="outputs">
+            {result.outputs.map((path) => (
+              <li key={path}>
+                <span className="output-name">{fileName(path)}</span>
+                <button onClick={() => reveal(path)}>表示</button>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+    </main>
+  );
+}
+
+export default App;

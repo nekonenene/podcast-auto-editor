@@ -25,7 +25,7 @@ macOS / Apple Silicon を最優先とする。
 
 ## 技術構成
 
-- コア/CLI: Rust (Cargo workspace)。GUI は Tauri 2 を予定（Phase 3、未実装）
+- コア/CLI: Rust (Cargo workspace)。GUI は Tauri 2 + React + TS (crates/pae-app)
 - VAD: Silero VAD (`voice_activity_detector` crate)
 - 文字起こし: whisper.cpp (`whisper-rs`, Metal)。デフォルトモデル large-v3-turbo q5_0
 - メディア処理: ffmpeg 外部プロセス（開発時は PATH の ffmpeg、配布時は sidecar 予定）
@@ -46,6 +46,9 @@ cargo test -p pae-core -- --ignored
 cargo run -p pae-cli -- run input.mp4 -o output --bgm bgm.mp3
 cargo run -p pae-cli -- analyze input.mp4       # timeline.json 生成のみ
 cargo run -p pae-cli -- dev --help              # 検証用低レベルコマンド
+
+# デスクトップアプリ (crates/pae-app で実行)
+npm run tauri dev
 
 # format / lint
 cargo fmt

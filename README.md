@@ -19,11 +19,14 @@ Google Meet などで録画したポッドキャスト動画を入れると、
 
 ## 現在の状態
 
-Phase 2 (CLI) まで完成しています。デスクトップ GUI (Tauri 2) は Phase 3 で実装予定です。
+CLI とデスクトップ GUI (Tauri 2) が動作します。
+FFmpeg の sidecar 同梱・アプリ配布用ビルドは今後対応予定です
+（現時点では ffmpeg を別途インストールする必要があります）。
 
 ## 必要な開発環境
 
 - Rust (stable)
+- Node.js（デスクトップ GUI の開発に必要）
 - ffmpeg / ffprobe（開発中は Homebrew 等のものを使います）
 - cmake（whisper.cpp のビルドに必要）
 - Xcode Command Line Tools
@@ -31,6 +34,18 @@ Phase 2 (CLI) まで完成しています。デスクトップ GUI (Tauri 2) は
 ```bash
 brew install ffmpeg cmake
 ```
+
+## デスクトップアプリの起動
+
+```bash
+cd crates/pae-app
+npm install
+npm run tauri dev
+```
+
+動画をウィンドウへドラッグ＆ドロップ（またはクリックで選択）し、
+「編集開始」を押すだけで Podcast 一式が生成されます。
+BGM・音量・プリセットなどの設定は自動で保存され、次回のデフォルトになります。
 
 ## ビルドと実行
 

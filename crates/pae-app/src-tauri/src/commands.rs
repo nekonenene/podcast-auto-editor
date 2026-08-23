@@ -1,0 +1,224 @@
+//! フロントエンドから invoke される Tauri コマンド群。
+//! ビジネスロジックは持たず、pae-core の呼び出しと DTO 変換だけを行う
+
+use std::path::PathBuf;
+use std::sync::Mutex;
+
+use serde::{Deserialize, Serialize};
+use tauri::ipc::Channel;
+use tauri::State;
+
+use pae_core::config::AppConfig;
+use pae_core::media::ffmpeg::Ffmpeg;
+use pae_core::media::probe::probe;
+use pae_core::output::TranscriptFormat;
+use pae_core::pipeline::{run_job, JobSpec};
+use pae_core::progress::{CancelToken, ProgressReport, ProgressSink, Stage};
+use pae_core::transcribe::model::{ModelManager, MODELS};
+use pae_core::types::{MediaInfo, Preset, VadParams};
+
+/// 実行中ジョブのキャンセルトークン置き場。同時実行は1ジョブに制限する
+pub struct JobState(pub Mutex<Option<CancelToken>>);
+
+/// フロントエンドへ送る進捗イベント
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProgressEvent {
+    pub stage: Stage,
+    pub stage_label: String,
+    pub fraction: Option<f32>,
+    pub message: Option<String>,
+}
+
+struct ChannelSink(Channel<ProgressEvent>);
+
+impl ProgressSink for ChannelSink {
+    fn report(&self, report: &ProgressReport) {
+        // 送信失敗はフロント側の再描画が止まるだけなので処理は継続する
+        let _ = self.0.send(ProgressEvent {
+            stage: report.stage,
+            stage_label: report.stage.label().to_string(),
+            fraction: report.fraction,
+            message: report.message.clone(),
+        });
+    }
+}
+
+/// GUI の編集開始リクエスト
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JobRequest {
+    pub input: PathBuf,
+    pub output_dir: PathBuf,
+    pub bgm: Option<PathBuf>,
+    pub bgm_volume: f32,
+    pub fade_in_s: f32,
+    pub fade_out_s: f32,
+    pub preset: String,
+    pub transcribe: bool,
+    pub model: String,
+}
+
+/// GUI へ返すジョブ結果
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JobResult {
+    pub outputs: Vec<String>,
+    pub source_duration_ms: u64,
+    pub output_duration_ms: u64,
+    pub timings: Vec<StageSeconds>,
+    pub total_seconds: f64,
+    pub real_time_factor: f64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StageSeconds {
+    pub stage_label: String,
+    pub seconds: f64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelInfo {
+    pub name: String,
+    pub approx_size_mb: u64,
+    pub description: String,
+    pub downloaded: bool,
+}
+
+#[tauri::command]
+pub fn get_config() -> Result<AppConfig, String> {
+    AppConfig::load().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn list_models() -> Result<Vec<ModelInfo>, String> {
+    let manager = ModelManager::new().map_err(|e| e.to_string())?;
+    Ok(MODELS
+        .iter()
+        .map(|spec| ModelInfo {
+            name: spec.name.to_string(),
+            approx_size_mb: spec.approx_size_mb,
+            description: spec.description.to_string(),
+            downloaded: manager.is_downloaded(spec),
+        })
+        .collect())
+}
+
+#[tauri::command]
+pub async fn probe_media(path: PathBuf) -> Result<MediaInfo, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let config = AppConfig::load().map_err(|e| e.to_string())?;
+        let ffmpeg = Ffmpeg::locate(config.ffmpeg_dir.as_deref()).map_err(|e| e.to_string())?;
+        probe(&ffmpeg, &path).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn start_job(
+    state: State<'_, JobState>,
+    request: JobRequest,
+    on_progress: Channel<ProgressEvent>,
+) -> Result<JobResult, String> {
+    let cancel = CancelToken::new();
+    {
+        let mut slot = state.0.lock().expect("job state lock");
+        if slot.is_some() {
+            return Err("すでに処理が実行中です".to_string());
+        }
+        *slot = Some(cancel.clone());
+    }
+
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let spec = build_spec_and_save_defaults(&request)?;
+        let sink = ChannelSink(on_progress);
+        run_job(&spec, &sink, &cancel).map_err(|e| e.to_string())
+    })
+    .await;
+
+    // 成功・失敗にかかわらず「実行中」状態を解除する
+    state.0.lock().expect("job state lock").take();
+
+    let report = result.map_err(|e| e.to_string())??;
+    Ok(JobResult {
+        outputs: report
+            .outputs
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect(),
+        source_duration_ms: report.source_duration_ms,
+        output_duration_ms: report.output_duration_ms,
+        timings: report
+            .timings
+            .iter()
+            .map(|t| StageSeconds {
+                stage_label: t.stage.label().to_string(),
+                seconds: t.duration.as_secs_f64(),
+            })
+            .collect(),
+        total_seconds: report.total_duration.as_secs_f64(),
+        real_time_factor: report.real_time_factor(),
+    })
+}
+
+/// リクエストから JobSpec を作り、あわせて設定を次回デフォルトとして保存する
+fn build_spec_and_save_defaults(request: &JobRequest) -> Result<JobSpec, String> {
+    let mut config = AppConfig::load().map_err(|e| e.to_string())?;
+    config.default_bgm = request.bgm.clone();
+    config.bgm.volume = request.bgm_volume;
+    config.bgm.fade_in_s = request.fade_in_s;
+    config.bgm.fade_out_s = request.fade_out_s;
+    config.preset = request.preset.clone();
+    config.model = request.model.clone();
+    config.transcribe = request.transcribe;
+    config.output_dir = Some(request.output_dir.clone());
+    config.save().map_err(|e| e.to_string())?;
+
+    let preset =
+        Preset::by_name(&request.preset).ok_or_else(|| format!("未知のプリセット: {}", request.preset))?;
+
+    Ok(JobSpec {
+        input: request.input.clone(),
+        output_dir: request.output_dir.clone(),
+        bgm: request.bgm.clone(),
+        bgm_opts: config.bgm.clone(),
+        preset,
+        vad_params: VadParams::default(),
+        target_lufs: config.target_lufs,
+        transcribe: request.transcribe,
+        model: request.model.clone(),
+        formats: vec![
+            TranscriptFormat::Txt,
+            TranscriptFormat::Json,
+            TranscriptFormat::Srt,
+            TranscriptFormat::Markdown,
+        ],
+        ffmpeg_dir: config.ffmpeg_dir.clone(),
+        timeline: None,
+    })
+}
+
+#[tauri::command]
+pub fn cancel_job(state: State<'_, JobState>) {
+    if let Some(token) = state.0.lock().expect("job state lock").as_ref() {
+        token.cancel();
+    }
+}
+
+/// Finder でファイルを表示する (macOS)。他 OS は将来対応
+#[tauri::command]
+pub fn reveal_path(path: PathBuf) -> Result<(), String> {
+    if cfg!(target_os = "macos") {
+        std::process::Command::new("open")
+            .arg("-R")
+            .arg(&path)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    } else {
+        Err("このOSではまだ対応していません".to_string())
+    }
+}

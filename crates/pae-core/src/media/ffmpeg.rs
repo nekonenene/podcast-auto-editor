@@ -22,14 +22,38 @@ impl Ffmpeg {
             .map(|p| p.to_path_buf())
             .or_else(|| std::env::var_os("PAE_FFMPEG_DIR").map(PathBuf::from));
 
-        let (ffmpeg, ffprobe) = match dir {
-            Some(dir) => (dir.join("ffmpeg"), dir.join("ffprobe")),
-            None => (PathBuf::from("ffmpeg"), PathBuf::from("ffprobe")),
-        };
+        if let Some(dir) = dir {
+            let candidate = Self {
+                ffmpeg: dir.join("ffmpeg"),
+                ffprobe: dir.join("ffprobe"),
+            };
+            candidate.verify()?;
+            return Ok(candidate);
+        }
 
-        let candidate = Self { ffmpeg, ffprobe };
-        candidate.verify()?;
-        Ok(candidate)
+        // PATH → よくあるインストール先の順で探す。
+        // GUI アプリは Finder から起動されるとシェルの PATH を継承しないため、
+        // Homebrew などの標準的な場所へのフォールバックが必要
+        let mut candidates = vec![Self {
+            ffmpeg: PathBuf::from("ffmpeg"),
+            ffprobe: PathBuf::from("ffprobe"),
+        }];
+        for dir in ["/opt/homebrew/bin", "/usr/local/bin"] {
+            let dir = Path::new(dir);
+            candidates.push(Self {
+                ffmpeg: dir.join("ffmpeg"),
+                ffprobe: dir.join("ffprobe"),
+            });
+        }
+
+        let mut last_error = None;
+        for candidate in candidates {
+            match candidate.verify() {
+                Ok(()) => return Ok(candidate),
+                Err(e) => last_error = Some(e),
+            }
+        }
+        Err(last_error.expect("候補は必ず1つ以上ある"))
     }
 
     fn verify(&self) -> Result<()> {
