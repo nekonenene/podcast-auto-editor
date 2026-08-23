@@ -86,13 +86,15 @@ h1 {
 .waveform-controls {
   display: flex;
   align-items: center;
-  gap: 12px;
+  flex-wrap: wrap;
+  gap: 8px 12px;
   margin-top: 6px;
   font-size: 12px;
   color: #8e8e93;
 }
 
-.waveform-controls .play {
+.waveform-controls .play,
+.waveform-controls .mark {
   border: 1px solid #0a84ff;
   border-radius: 6px;
   padding: 3px 10px;
@@ -101,6 +103,16 @@ h1 {
   font-size: 12px;
   cursor: pointer;
   flex-shrink: 0;
+}
+
+.waveform-controls .mark {
+  border-color: #8e8e93;
+  color: inherit;
+}
+
+.waveform-controls .mark:hover:not(:disabled) {
+  border-color: #0a84ff;
+  color: #0a84ff;
 }
 
 .waveform-range {

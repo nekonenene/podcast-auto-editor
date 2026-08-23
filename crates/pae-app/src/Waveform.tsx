@@ -152,6 +152,18 @@ export function Waveform({
     setPlayheadMs(ms);
   }, []);
 
+  // 指定位置へシークしてそのまま再生する。境界の確認用
+  const playFrom = useCallback(
+    async (ms: number) => {
+      const audio = audioRef.current;
+      if (!audio) return;
+      seekTo(ms);
+      await audio.play();
+      setPlaying(true);
+    },
+    [seekTo],
+  );
+
   const togglePlay = useCallback(async () => {
     const audio = audioRef.current;
     if (!audio) return;
@@ -229,11 +241,56 @@ export function Waveform({
         <button className="play" onClick={togglePlay} disabled={disabled}>
           {playing ? "⏸ 停止" : "▶ 再生"}
         </button>
+        {/* 再生しながら「本編が始まった」と思った瞬間に押して境界を決める */}
+        <button
+          className="mark"
+          onClick={() =>
+            onTrimChange(
+              Math.min(Math.round(playheadMs), trimEndMs - 1000),
+              trimEndMs,
+            )
+          }
+          disabled={disabled}
+          title="現在の再生位置を出力範囲の開始にします"
+        >
+          開始位置を指定
+        </button>
+        <button
+          className="mark"
+          onClick={() =>
+            onTrimChange(
+              trimStartMs,
+              Math.max(Math.round(playheadMs), trimStartMs + 1000),
+            )
+          }
+          disabled={disabled}
+          title="現在の再生位置を出力範囲の終了にします"
+        >
+          終了位置を指定
+        </button>
         <span className="waveform-time">
           {formatTime(playheadMs)} / {formatTime(durationMs)}
         </span>
         <span className="waveform-range">
           出力範囲: {formatTime(trimStartMs)} 〜 {formatTime(trimEndMs)}
+          <button
+            className="mark"
+            onClick={() => void playFrom(trimStartMs)}
+            disabled={disabled}
+            title="出力範囲の開始位置から再生して、境界を確認します"
+          >
+            ▶ 開始から
+          </button>
+          <button
+            className="mark"
+            onClick={() =>
+              void playFrom(Math.max(trimStartMs, trimEndMs - 5000))
+            }
+            disabled={disabled}
+            title="出力範囲の終了5秒前から再生します。終端で自動停止します"
+          >
+            ▶ 終了前5秒
+          </button>
           {trimmed && (
             <button
               className="reset-trim"
