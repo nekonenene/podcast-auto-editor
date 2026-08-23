@@ -33,29 +33,19 @@ macOS / Apple Silicon を最優先とする。
 ## コマンド
 
 ```bash
-# unit test + integration test (ffmpeg 必須)
-cargo test
-
-# モデルダウンロードが必要なテスト
-cargo test -p pae-core -- --ignored
-
-# テスト用メディア生成
-./scripts/make-fixtures.sh
+make run-dev   # デスクトップアプリを開発モードで起動
+make test      # unit test + integration test (ffmpeg 必須)
+make test-all  # モデルダウンロードが必要なテストも含める
+make fixtures  # テスト用メディア生成
+make check     # fmt + clippy + tsc + test をまとめて実行
 
 # CLI 実行例
 cargo run -p pae-cli -- run input.mp4 -o output --bgm bgm.mp3
 cargo run -p pae-cli -- analyze input.mp4       # timeline.json 生成のみ
 cargo run -p pae-cli -- dev --help              # 検証用低レベルコマンド
-
-# デスクトップアプリ (crates/pae-app で実行)
-npm run tauri dev
-
-# format / lint
-cargo fmt
-cargo clippy --all-targets
 ```
 
-変更後は `cargo fmt && cargo clippy --all-targets && cargo test` を必ず実行する。
+変更後は `make check` を必ず実行する。
 
 ## アーキテクチャ
 

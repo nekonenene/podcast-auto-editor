@@ -41,9 +41,8 @@ brew install ffmpeg cmake
 ## デスクトップアプリの起動
 
 ```bash
-cd crates/pae-app
-npm install
-npm run tauri dev
+make setup   # 初回のみ (npm install)
+make run-dev
 ```
 
 動画をウィンドウへドラッグ＆ドロップ（またはクリックで選択）し、  
