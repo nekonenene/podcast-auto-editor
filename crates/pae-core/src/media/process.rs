@@ -461,25 +461,31 @@ pub fn apply_loudnorm(
     ffmpeg.run(&args, Some(duration_ms), on_progress, cancel)
 }
 
-/// 完成した動画から Podcast 用 MP3 を書き出す
+/// 完成した動画・音声から Podcast 用 MP3 を書き出す。
+/// bitrate_kbps が 0 のときは VBR 高音質 (-q:a 2, 平均 ~190kbps) で書き出す
 pub fn encode_mp3(
     ffmpeg: &Ffmpeg,
     input: &Path,
     output: &Path,
     duration_ms: u64,
+    bitrate_kbps: u32,
     on_progress: &mut dyn FnMut(f32),
     cancel: &CancelToken,
 ) -> Result<String> {
-    let args: Vec<String> = vec![
+    let quality_args: [String; 2] = if bitrate_kbps == 0 {
+        ["-q:a".into(), "2".into()]
+    } else {
+        ["-b:a".into(), format!("{bitrate_kbps}k")]
+    };
+    let mut args: Vec<String> = vec![
         "-i".into(),
         input.display().to_string(),
         "-vn".into(),
         "-c:a".into(),
         "libmp3lame".into(),
-        "-q:a".into(),
-        "2".into(),
-        output.display().to_string(),
     ];
+    args.extend(quality_args);
+    args.push(output.display().to_string());
     ffmpeg.run(&args, Some(duration_ms), on_progress, cancel)
 }
 

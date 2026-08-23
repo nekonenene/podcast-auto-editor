@@ -89,6 +89,8 @@ pub struct AppConfig {
     pub ffmpeg_dir: Option<PathBuf>,
     /// 出力するファイルの選択
     pub outputs: OutputSelection,
+    /// Podcast MP3 のビットレート (kbps)。0 は VBR 高音質 (内容に応じた可変)
+    pub mp3_bitrate_kbps: u32,
 }
 
 impl Default for AppConfig {
@@ -103,6 +105,7 @@ impl Default for AppConfig {
             target_lufs: -16.0,
             ffmpeg_dir: None,
             outputs: OutputSelection::default(),
+            mp3_bitrate_kbps: 128,
         }
     }
 }

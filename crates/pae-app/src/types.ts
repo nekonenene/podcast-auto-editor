@@ -63,7 +63,11 @@ export interface AppConfig {
   target_lufs: number;
   ffmpeg_dir: string | null;
   outputs: OutputSelection;
+  mp3_bitrate_kbps: number;
 }
+
+// 0 は VBR 高音質 (可変ビットレート) を表す
+export const MP3_BITRATES = [64, 96, 128, 192, 256, 320, 0] as const;
 
 export interface MediaInfo {
   path: string;

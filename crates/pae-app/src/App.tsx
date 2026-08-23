@@ -14,6 +14,7 @@ import type {
 import {
   DEFAULT_OUTPUTS,
   MEDIA_OUTPUT_KEYS,
+  MP3_BITRATES,
   OUTPUT_LABELS,
   STAGE_LABELS,
   STAGE_ORDER,
@@ -61,6 +62,7 @@ function App() {
   const [endingTailS, setEndingTailS] = useState(5.0);
   const [voiceDuck, setVoiceDuck] = useState(true);
   const [outputs, setOutputs] = useState<OutputSelection>(DEFAULT_OUTPUTS);
+  const [mp3Bitrate, setMp3Bitrate] = useState(128);
   const [showSettings, setShowSettings] = useState(false);
 
   const [previewing, setPreviewing] = useState(false);
@@ -85,6 +87,7 @@ function App() {
         setEndingTailS(config.bgm.ending_tail_s ?? 5.0);
         setVoiceDuck((config.bgm.voice_duck_db ?? -4.0) < 0);
         setOutputs(config.outputs ?? DEFAULT_OUTPUTS);
+        setMp3Bitrate(config.mp3_bitrate_kbps ?? 128);
         setTranscribe(config.transcribe);
         setModel(config.model);
         setOutputDir(config.output_dir);
@@ -209,13 +212,19 @@ function App() {
 
   // 設定画面での変更は即座に保存する
   const saveSettings = useCallback(
-    (nextOutputs: OutputSelection, nextVoiceDuck: boolean) => {
+    (
+      nextOutputs: OutputSelection,
+      nextVoiceDuck: boolean,
+      nextMp3Bitrate: number,
+    ) => {
       setOutputs(nextOutputs);
       setVoiceDuck(nextVoiceDuck);
+      setMp3Bitrate(nextMp3Bitrate);
       invoke("save_settings", {
         update: {
           outputs: nextOutputs,
           voiceDuckDb: nextVoiceDuck ? -4.0 : 0.0,
+          mp3BitrateKbps: nextMp3Bitrate,
         },
       }).catch((e) => setError(String(e)));
     },
@@ -303,6 +312,7 @@ function App() {
                     saveSettings(
                       { ...outputs, [key]: e.target.checked },
                       voiceDuck,
+                      mp3Bitrate,
                     )
                   }
                 />
@@ -324,6 +334,7 @@ function App() {
                         saveSettings(
                           { ...outputs, [key]: e.target.checked },
                           voiceDuck,
+                          mp3Bitrate,
                         )
                       }
                     />
@@ -337,12 +348,34 @@ function App() {
             )}
           </div>
           <div className="field">
+            <label>MP3 の音質</label>
+            <select
+              value={mp3Bitrate}
+              onChange={(e) =>
+                saveSettings(outputs, voiceDuck, Number(e.target.value))
+              }
+            >
+              {MP3_BITRATES.map((kbps) => (
+                <option key={kbps} value={kbps}>
+                  {kbps === 0
+                    ? "VBR — 高音質 (内容に応じた可変ビットレート)"
+                    : `${kbps} kbps`}
+                  {kbps === 64 ? " — 会話向け (小さいファイル)" : ""}
+                  {kbps === 128 ? " — 標準" : ""}
+                  {kbps === 320 ? " — 最高音質" : ""}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="field">
             <label>音声処理</label>
             <label className="row">
               <input
                 type="checkbox"
                 checked={voiceDuck}
-                onChange={(e) => saveSettings(outputs, e.target.checked)}
+                onChange={(e) =>
+                  saveSettings(outputs, e.target.checked, mp3Bitrate)
+                }
               />
               声の帯域で BGM を下げる (聞き取りやすくなります)
             </label>

@@ -39,6 +39,10 @@ pub struct CommonOpts {
     #[arg(long)]
     pub bgm_duck: Option<f32>,
 
+    /// Podcast MP3 のビットレート (kbps)。0 で VBR 高音質
+    #[arg(long)]
+    pub mp3_bitrate: Option<u32>,
+
     /// ラウドネスターゲット (LUFS, 例: -16)
     #[arg(long)]
     pub lufs: Option<f64>,
@@ -110,6 +114,9 @@ pub fn build_spec(
     }
     if let Some(v) = opts.bgm_duck {
         spec.bgm_opts.voice_duck_db = v;
+    }
+    if let Some(v) = opts.mp3_bitrate {
+        spec.mp3_bitrate_kbps = v;
     }
     if let Some(v) = opts.lufs {
         spec.target_lufs = v;

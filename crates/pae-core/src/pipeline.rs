@@ -36,6 +36,8 @@ pub struct JobSpec {
     pub transcribe: bool,
     pub model: String,
     pub outputs: OutputSelection,
+    /// Podcast MP3 のビットレート (kbps)
+    pub mp3_bitrate_kbps: u32,
     pub ffmpeg_dir: Option<PathBuf>,
     /// analyze 済みタイムラインを渡すと VAD をスキップして再利用する
     pub timeline: Option<EditTimeline>,
@@ -55,6 +57,7 @@ impl JobSpec {
             transcribe: config.transcribe,
             model: config.model.clone(),
             outputs: config.outputs.clone(),
+            mp3_bitrate_kbps: config.mp3_bitrate_kbps,
             ffmpeg_dir: config.ffmpeg_dir.clone(),
             timeline: None,
         }
@@ -304,7 +307,15 @@ pub fn run_job(spec: &JobSpec, sink: &dyn ProgressSink, cancel: &CancelToken) ->
     if spec.outputs.podcast_mp3 {
         let mp3_path = output_path(&spec.output_dir, &spec.input, "podcast", "mp3");
         runner.run(Stage::RenderMp3, |p| {
-            encode_mp3(&ffmpeg, &edited_path, &mp3_path, output_ms, p, cancel)
+            encode_mp3(
+                &ffmpeg,
+                &edited_path,
+                &mp3_path,
+                output_ms,
+                spec.mp3_bitrate_kbps,
+                p,
+                cancel,
+            )
         })?;
         outputs.push(mp3_path);
     }

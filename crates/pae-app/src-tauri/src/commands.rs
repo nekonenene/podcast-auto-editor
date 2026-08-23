@@ -192,6 +192,7 @@ fn build_spec_and_save_defaults(request: &JobRequest) -> Result<JobSpec, String>
         transcribe: request.transcribe,
         model: request.model.clone(),
         outputs: config.outputs.clone(),
+        mp3_bitrate_kbps: config.mp3_bitrate_kbps,
         ffmpeg_dir: config.ffmpeg_dir.clone(),
         timeline: None,
     })
@@ -205,6 +206,7 @@ fn build_spec_and_save_defaults(request: &JobRequest) -> Result<JobSpec, String>
 pub struct SettingsUpdate {
     pub outputs: pae_core::config::OutputSelection,
     pub voice_duck_db: f32,
+    pub mp3_bitrate_kbps: u32,
 }
 
 #[tauri::command]
@@ -212,6 +214,7 @@ pub fn save_settings(update: SettingsUpdate) -> Result<(), String> {
     let mut config = AppConfig::load().map_err(|e| e.to_string())?;
     config.outputs = update.outputs;
     config.bgm.voice_duck_db = update.voice_duck_db;
+    config.mp3_bitrate_kbps = update.mp3_bitrate_kbps;
     config.save().map_err(|e| e.to_string())
 }
 
