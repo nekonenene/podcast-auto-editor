@@ -1,18 +1,18 @@
 # Windows での開発環境セットアップ
 
-Windows 上で開発モード（`cargo` / `npm`）でアプリを動かすための手順です。
+Windows 上で開発モード（`cargo` / `npm`）でアプリを動かすための手順です。  
 インストーラーでの配布はまだ対応していません。
 
 ## コマンドはどこで実行するか
 
-このドキュメントのコマンドは、特に断りがない限りすべて
-**PowerShell**（Windows Terminal で開くものでよい）から実行してください。
+このドキュメントのコマンドは、特に断りがない限りすべて  
+**PowerShell**（Windows Terminal で開くものでよい）から実行してください。  
 winget も cargo も npm も PowerShell からそのまま使えます。
 
-ただしビルド系のコマンドは、**Developer PowerShell for VS 2022** から実行してください。
-Visual Studio と一緒にスタートメニューへ入るショートカットです。
-clang は MSVC と Windows SDK のヘッダーの場所を自力では見つけられず、
-通常の PowerShell でビルドすると `stdio.h` が見つからないというエラーで失敗します。
+ただしビルド系のコマンドは、**Developer PowerShell for VS 2022** から実行してください。  
+Visual Studio と一緒にスタートメニューへ入るショートカットです。  
+clang は MSVC と Windows SDK のヘッダーの場所を自力では見つけられず、  
+通常の PowerShell でビルドすると `stdio.h` が見つからないというエラーで失敗します。  
 Developer PowerShell は環境変数 `INCLUDE` を設定してくれるため、これが解決します。
 
 いま開いている PowerShell をそのまま切り替えることもできます。
@@ -25,12 +25,12 @@ Enter-VsDevShell -VsInstallPath $vs -SkipAutomaticLocation -DevCmdArguments "-ar
 
 winget でのインストール作業は、通常の PowerShell のままで構いません。
 
-**WSL は使わないでください。**
-このアプリは Windows ネイティブのデスクトップアプリのため、
-WSL 内でビルドすると Linux 向けバイナリになってしまい、
+**WSL は使わないでください。**  
+このアプリは Windows ネイティブのデスクトップアプリのため、  
+WSL 内でビルドすると Linux 向けバイナリになってしまい、  
 GUI の表示に使う WebView2 や、動画エンコードに使う Media Foundation が利用できません。
 
-bash スクリプト（`scripts/make-fixtures.sh`）や `make` を使いたい場合だけ、
+bash スクリプト（`scripts/make-fixtures.sh`）や `make` を使いたい場合だけ、  
 Git for Windows 付属の **Git Bash** を使います。詳しくは後述の対応表を参照してください。
 
 ## 必要なもの
@@ -49,35 +49,35 @@ Git for Windows 付属の **Git Bash** を使います。詳しくは後述の�
 
 ### 環境変数の設定
 
-LLVM を入れたら、環境変数 `LIBCLANG_PATH` を設定してください。
-whisper-rs は C のヘッダーから Rust の定義を作るのに bindgen を使い、
+LLVM を入れたら、環境変数 `LIBCLANG_PATH` を設定してください。  
+whisper-rs は C のヘッダーから Rust の定義を作るのに bindgen を使い、  
 bindgen は `libclang.dll` の場所をこの変数から探すためです。
 
 ```powershell
 [Environment]::SetEnvironmentVariable('LIBCLANG_PATH', 'C:\Program Files\LLVM\bin', 'User')
 ```
 
-未設定のままビルドすると `Unable to find libclang` というエラーで止まります。
-Visual Studio にも `VC\Tools\Llvm` というフォルダがありますが、
+未設定のままビルドすると `Unable to find libclang` というエラーで止まります。  
+Visual Studio にも `VC\Tools\Llvm` というフォルダがありますが、  
 入っているのは clang-format と clang-tidy だけで `libclang.dll` は含まれないため、LLVM を別に入れる必要があります。
 
-あわせて `BINDGEN_EXTRA_CLANG_ARGS` も設定してください。
-bindgen は `clang.exe` を起動せず `libclang.dll` を読み込んで使うため、
-clang が自分の組み込みヘッダーの置き場所を見失い、`stdbool.h` が見つからないというエラーになります。
+あわせて `BINDGEN_EXTRA_CLANG_ARGS` も設定してください。  
+bindgen は `clang.exe` を起動せず `libclang.dll` を読み込んで使うため、  
+clang が自分の組み込みヘッダーの置き場所を見失い、`stdbool.h` が見つからないというエラーになります。  
 その場所を直接教えるための設定です。
 
 ```powershell
 [Environment]::SetEnvironmentVariable('BINDGEN_EXTRA_CLANG_ARGS', '"-IC:/Program Files/LLVM/lib/clang/22/include"', 'User')
 ```
 
-パスの `22` は LLVM のメジャーバージョンなので、LLVM を更新したら書き換えてください。
-値を二重引用符で囲み、区切りをスラッシュにしているのには理由があります。
-bindgen はこの変数をシェルと同じ規則で単語に分割するため、
+パスの `22` は LLVM のメジャーバージョンなので、LLVM を更新したら書き換えてください。  
+値を二重引用符で囲み、区切りをスラッシュにしているのには理由があります。  
+bindgen はこの変数をシェルと同じ規則で単語に分割するため、  
 囲まないと `Program Files` の空白でパスが切れ、バックスラッシュもエスケープとして消えてしまいます。
 
-これらの設定を忘れると、bindgen は失敗してもビルドを止めず、
-クレートに同梱された Linux 用の定義へ黙って差し替えます。
-その結果 `_IO_FILE` や `_G_fpos_t` のサイズが合わないという、
+これらの設定を忘れると、bindgen は失敗してもビルドを止めず、  
+クレートに同梱された Linux 用の定義へ黙って差し替えます。  
+その結果 `_IO_FILE` や `_G_fpos_t` のサイズが合わないという、  
 原因のわかりにくいコンパイルエラーになります。
 
 winget 以外で FFmpeg を入れた場合、PATH に無くても以下の場所は自動で探します。
@@ -91,8 +91,8 @@ winget 以外で FFmpeg を入れた場合、PATH に無くても以下の場所
 
 ## CUDA による文字起こしの高速化（任意）
 
-Windows では macOS の Metal に相当する GPU 支援が既定では使われず、
-文字起こしが CPU 推論になり大幅に遅くなります。
+Windows では macOS の Metal に相当する GPU 支援が既定では使われず、  
+文字起こしが CPU 推論になり大幅に遅くなります。  
 NVIDIA GPU があるなら CUDA 対応でビルドすると高速になります。
 
 1. [CUDA Toolkit](https://developer.nvidia.com/cuda-downloads) をインストールする
@@ -116,14 +116,14 @@ make コマンドは `winget install ezwinports.make` でインストールで�
 
 ### おまけ: CLI で使う場合
 
-デスクトップアプリを起動せず、コマンドラインだけで処理することもできます。
+デスクトップアプリを起動せず、コマンドラインだけで処理することもできます。  
 文字起こしを GPU でおこなうには、ここでも `--features cuda` を付けます。
 
 ```bash
 cargo run -p pae-cli --features cuda -- run input.mp4 -o output
 ```
 
-無音検出とタイムライン生成だけを確認したい場合は `analyze` を使います。
+無音検出とタイムライン生成だけを確認したい場合は `analyze` を使います。  
 こちらは文字起こしをしないため、`--features cuda` を付ける意味はありません。
 
 ```bash
@@ -132,12 +132,12 @@ cargo run -p pae-cli -- analyze input.mp4
 
 ## make が無い環境でのコマンド対応表
 
-Makefile のターゲットは以下の生コマンドに対応します。
+Makefile のターゲットは以下の生コマンドに対応します。  
 Git for Windows 付属の Git Bash を使う場合は `make` を入れれば Makefile もそのまま動きます。
 
-PowerShell で実行する場合の注意:
-Windows 標準の PowerShell 5.1 は `&&` でのコマンド連結に対応していません。
-`cd crates/pae-app` と `npm install` を分けて実行するか、
+PowerShell で実行する場合の注意:  
+Windows 標準の PowerShell 5.1 は `&&` でのコマンド連結に対応していません。  
+`cd crates/pae-app` と `npm install` を分けて実行するか、  
 `&&` が使える PowerShell 7 (`winget install Microsoft.PowerShell`) の利用をおすすめします。
 
 | make ターゲット | 対応するコマンド |
@@ -152,9 +152,9 @@ Windows 標準の PowerShell 5.1 は `&&` でのコマンド連結に対応し�
 | `make lint` | `cargo clippy --all-targets` と `cd crates/pae-app && npx tsc --noEmit` |
 | `make check` | fmt → lint → test を順に実行 |
 
-`scripts/make-fixtures.sh` は bash スクリプトのため Git Bash で実行してください。
-macOS の `say` コマンドを使う日本語音声の fixture だけは自動でスキップされますが、
-統合テスト (`cargo test`) は fixtures/ を使わず ffmpeg で自前生成するため、
+`scripts/make-fixtures.sh` は bash スクリプトのため Git Bash で実行してください。  
+macOS の `say` コマンドを使う日本語音声の fixture だけは自動でスキップされますが、  
+統合テスト (`cargo test`) は fixtures/ を使わず ffmpeg で自前生成するため、  
 fixture 無しでもテストは通ります。
 
 ## Windows 固有の動作
