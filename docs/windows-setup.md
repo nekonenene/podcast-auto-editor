@@ -9,6 +9,22 @@ Windows 上で開発モード（`cargo` / `npm`）でアプリを動かすため
 **PowerShell**（Windows Terminal で開くものでよい）から実行してください。
 winget も cargo も npm も PowerShell からそのまま使えます。
 
+ただしビルド系のコマンドは、**Developer PowerShell for VS 2022** から実行してください。
+Visual Studio と一緒にスタートメニューへ入るショートカットです。
+clang は MSVC と Windows SDK のヘッダーの場所を自力では見つけられず、
+通常の PowerShell でビルドすると `stdio.h` が見つからないというエラーで失敗します。
+Developer PowerShell は環境変数 `INCLUDE` を設定してくれるため、これが解決します。
+
+いま開いている PowerShell をそのまま切り替えることもできます。
+
+```powershell
+$vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+Import-Module "$vs\Common7\Tools\Microsoft.VisualStudio.DevShell.dll"
+Enter-VsDevShell -VsInstallPath $vs -SkipAutomaticLocation -DevCmdArguments "-arch=x64 -host_arch=x64"
+```
+
+winget でのインストール作業は、通常の PowerShell のままで構いません。
+
 **WSL は使わないでください。**
 このアプリは Windows ネイティブのデスクトップアプリのため、
 WSL 内でビルドすると Linux 向けバイナリになってしまい、
@@ -21,15 +37,48 @@ Git for Windows 付属の **Git Bash** を使います。詳しくは後述の�
 
 | ツール | 入手方法 | 補足 |
 | --- | --- | --- |
-| Visual Studio Build Tools | `winget install Microsoft.VisualStudio.2022.BuildTools` | 「C++ によるデスクトップ開発」ワークロードを選ぶ。Rust (MSVC) と whisper.cpp のビルドに必要 |
-| Rust (stable) | https://rustup.rs/ | MSVC ツールチェーン（デフォルト）を使う |
+| Visual Studio Build Tools | `winget install Microsoft.VisualStudio.2022.BuildTools --override "--quiet --wait --norestart --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"` | Rust (MSVC) と whisper.cpp のビルドに必要。`--override` を省くと外枠だけが入り、C++ コンパイラが入らない |
+| Rust (stable) | `winget install Rustlang.Rustup` もしくは https://rustup.rs | MSVC ツールチェーン（デフォルト）を使う |
 | CMake | `winget install Kitware.CMake` | whisper.cpp のビルドに必要 |
+| LLVM (libclang) | `winget install LLVM.LLVM` | whisper-rs の bindgen が `libclang.dll` を必要とする。あわせて後述の `LIBCLANG_PATH` を設定する |
 | Node.js | `winget install OpenJS.NodeJS.LTS` | デスクトップ GUI の開発に必要 |
 | FFmpeg | `winget install Gyan.FFmpeg` | full ビルドのため libx264 入りで、統合テストもそのまま動く |
 | WebView2 Runtime | 通常はプリインストール済み | Windows 11 と最近の Windows 10 には最初から入っている |
 
-インストール後に新しいターミナルを開き、`ffmpeg -version` と `cargo --version` が
-通ることを確認してください。
+インストール後に新しいターミナルを開き、`ffmpeg -version` と `cargo --version` が通ることを確認してください。
+
+### 環境変数の設定
+
+LLVM を入れたら、環境変数 `LIBCLANG_PATH` を設定してください。
+whisper-rs は C のヘッダーから Rust の定義を作るのに bindgen を使い、
+bindgen は `libclang.dll` の場所をこの変数から探すためです。
+
+```powershell
+[Environment]::SetEnvironmentVariable('LIBCLANG_PATH', 'C:\Program Files\LLVM\bin', 'User')
+```
+
+未設定のままビルドすると `Unable to find libclang` というエラーで止まります。
+Visual Studio にも `VC\Tools\Llvm` というフォルダがありますが、
+入っているのは clang-format と clang-tidy だけで `libclang.dll` は含まれないため、LLVM を別に入れる必要があります。
+
+あわせて `BINDGEN_EXTRA_CLANG_ARGS` も設定してください。
+bindgen は `clang.exe` を起動せず `libclang.dll` を読み込んで使うため、
+clang が自分の組み込みヘッダーの置き場所を見失い、`stdbool.h` が見つからないというエラーになります。
+その場所を直接教えるための設定です。
+
+```powershell
+[Environment]::SetEnvironmentVariable('BINDGEN_EXTRA_CLANG_ARGS', '"-IC:/Program Files/LLVM/lib/clang/22/include"', 'User')
+```
+
+パスの `22` は LLVM のメジャーバージョンなので、LLVM を更新したら書き換えてください。
+値を二重引用符で囲み、区切りをスラッシュにしているのには理由があります。
+bindgen はこの変数をシェルと同じ規則で単語に分割するため、
+囲まないと `Program Files` の空白でパスが切れ、バックスラッシュもエスケープとして消えてしまいます。
+
+これらの設定を忘れると、bindgen は失敗してもビルドを止めず、
+クレートに同梱された Linux 用の定義へ黙って差し替えます。
+その結果 `_IO_FILE` や `_G_fpos_t` のサイズが合わないという、
+原因のわかりにくいコンパイルエラーになります。
 
 winget 以外で FFmpeg を入れた場合、PATH に無くても以下の場所は自動で探します。
 
@@ -47,20 +96,23 @@ Windows では macOS の Metal に相当する GPU 支援が既定では使わ�
 NVIDIA GPU があるなら CUDA 対応でビルドすると高速になります。
 
 1. [CUDA Toolkit](https://developer.nvidia.com/cuda-downloads) をインストールする
-2. `cuda` feature を付けてビルド・起動する
+    ```powershell
+    winget install Nvidia.CUDA
+    ```
+2. make でビルド・起動する
+    ```bash
+    make up # 依存を解決
+    make run-dev-cuda # CUDAを使いビルド・起動
+    ```
 
-```bash
-make run-dev-cuda
-```
-
-make が無い環境では次のコマンドが同等です。
+make コマンドが無い環境では、以下で代替できます。  
+`--features cuda` がポイントです。
 
 ```bash
 cd crates/pae-app && npm run tauri -- dev --features cuda
 ```
 
-CLI の場合は `cargo run -p pae-cli --features cuda -- run input.mp4 -o output` のように
-`--features cuda` を付けます。
+make コマンドは `winget install ezwinports.make` でインストールできます。
 
 ## make が無い環境でのコマンド対応表
 
