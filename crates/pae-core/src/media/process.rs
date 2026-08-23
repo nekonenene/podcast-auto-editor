@@ -63,12 +63,15 @@ pub struct VideoEncodeOpts {
 
 impl VideoEncodeOpts {
     /// プラットフォームと解像度から適切なエンコーダとビットレートを選ぶ。
-    /// videotoolbox は x264 より同ビットレートでの品質が落ちるため、少し多めに盛る
+    /// ハードウェアエンコーダは x264 より同ビットレートでの品質が落ちるため、少し多めに盛る
     pub fn auto(height: Option<u32>) -> Self {
         let encoder = if cfg!(target_os = "macos") {
             "h264_videotoolbox"
+        } else if cfg!(target_os = "windows") {
+            // LGPL ビルドの ffmpeg には libx264 が入らないため、
+            // Windows 標準の Media Foundation エンコーダを使う
+            "h264_mf"
         } else {
-            // Windows では h264_mf を想定。開発用フォールバックとして libx264
             "libx264"
         };
         let bitrate = match height {

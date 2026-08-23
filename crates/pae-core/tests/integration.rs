@@ -25,6 +25,16 @@ fn cancel() -> CancelToken {
     CancelToken::new()
 }
 
+/// テストでは OS ごとの自動選択を使わず libx264 に固定する。
+/// CI の Windows ランナーにはハードウェアエンコーダが無く、
+/// auto() が選ぶ h264_mf で失敗するため
+fn test_encode_opts() -> VideoEncodeOpts {
+    VideoEncodeOpts {
+        encoder: "libx264".into(),
+        bitrate: "2500k".into(),
+    }
+}
+
 /// トーンパターン動画を生成する。
 /// 音声: 2s 440Hz → 4s 無音 → 2s 880Hz → 1s 無音 → 2s 440Hz (計11秒)
 fn generate_tone_video(ffmpeg: &Ffmpeg, dir: &Path) -> PathBuf {
@@ -156,7 +166,7 @@ fn cut_preserves_av_sync_and_tone_positions() {
         timeline.stats.output_duration_ms,
         0,
         true,
-        &VideoEncodeOpts::auto(Some(240)),
+        &test_encode_opts(),
         &mut |_| {},
         &cancel(),
     )
@@ -238,7 +248,7 @@ fn cut_audio_only_input() {
         timeline.stats.output_duration_ms,
         0,
         false,
-        &VideoEncodeOpts::auto(None),
+        &test_encode_opts(),
         &mut |_| {},
         &cancel(),
     )
