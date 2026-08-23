@@ -1,5 +1,6 @@
-# macOS と Windows でビルドとテストを検証する。
-# パブリックリポジトリのため標準ランナーの利用時間は無料
+# Windows でのビルドとテストを検証する。
+# macOS は開発環境そのもので検証されるため CI には含めない。
+# 必要になったら matrix で macos-latest を足せば両対応に戻せる
 name: CI
 
 on:
@@ -11,25 +12,18 @@ on:
 
 jobs:
   check:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [macos-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
+    runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # 統合テストに ffmpeg / ffprobe が必要。
-      # setup-ffmpeg は libx264 入りのビルドをキャッシュ付きで入れてくれるが
-      # x64 専用のため、arm64 の macOS ランナーでは Homebrew を使う
-      - if: runner.os == 'Windows'
-        uses: FedericoCarboni/setup-ffmpeg@v3
-      - if: runner.os == 'macOS'
-        run: brew install ffmpeg
+      # このアクションは libx264 入りのビルドをキャッシュ付きで入れてくれる
+      - uses: FedericoCarboni/setup-ffmpeg@v3
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          # ローカルの開発環境に合わせる
+          node-version: 26
           cache: npm
           cache-dependency-path: crates/pae-app/package-lock.json
 
