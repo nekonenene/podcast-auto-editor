@@ -4,7 +4,9 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    # windows_compatible はマージ前に CI を確認するための一時的な指定。
+    # マージ後に外してよい
+    branches: [main, windows_compatible]
   pull_request:
 
 jobs:
