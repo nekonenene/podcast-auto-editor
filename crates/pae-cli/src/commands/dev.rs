@@ -106,6 +106,7 @@ pub fn execute(args: DevArgs) -> anyhow::Result<()> {
                 &ranges,
                 &output,
                 timeline.stats.output_duration_ms,
+                0,
                 &VideoEncodeOpts::auto(info.height),
                 &mut print_progress,
                 &cancel,
@@ -177,6 +178,7 @@ pub fn execute(args: DevArgs) -> anyhow::Result<()> {
                 volume,
                 fade_in_s: fade_in,
                 fade_out_s: fade_out,
+                ..BgmOpts::default()
             };
             mix_bgm(
                 &ffmpeg,

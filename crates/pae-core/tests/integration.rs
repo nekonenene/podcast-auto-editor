@@ -154,6 +154,7 @@ fn cut_preserves_av_sync_and_tone_positions() {
         &keep_ranges,
         &output,
         timeline.stats.output_duration_ms,
+        0,
         &VideoEncodeOpts::auto(Some(240)),
         &mut |_| {},
         &cancel(),

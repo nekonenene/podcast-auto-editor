@@ -205,7 +205,14 @@ pub fn run_job(spec: &JobSpec, sink: &dyn ProgressSink, cancel: &CancelToken) ->
     std::fs::write(&timeline_path, serde_json::to_string_pretty(&timeline)?)?;
     outputs.push(timeline_path);
 
-    let output_ms = timeline.stats.output_duration_ms;
+    // BGM を付けるときだけ、末尾に BGM の余韻分の静止映像・無音を足す。
+    // 会話終了後に BGM だけが残ってフェードアウトするエンディングになる
+    let tail_ms = if spec.bgm.is_some() {
+        (spec.bgm_opts.ending_tail_s.max(0.0) * 1000.0) as u64
+    } else {
+        0
+    };
+    let output_ms = timeline.stats.output_duration_ms + tail_ms;
     let keep_ranges = timeline_to_keep_ranges(&timeline);
     let encode = VideoEncodeOpts::auto(info.height);
 
@@ -218,6 +225,7 @@ pub fn run_job(spec: &JobSpec, sink: &dyn ProgressSink, cancel: &CancelToken) ->
             &keep_ranges,
             &cut_path,
             output_ms,
+            tail_ms,
             &encode,
             p,
             cancel,

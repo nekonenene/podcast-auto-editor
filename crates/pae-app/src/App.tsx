@@ -50,6 +50,8 @@ function App() {
   const [outputDir, setOutputDir] = useState<string | null>(null);
   const [fadeInS, setFadeInS] = useState(2.0);
   const [fadeOutS, setFadeOutS] = useState(4.0);
+  const [endingTailS, setEndingTailS] = useState(5.0);
+  const [voiceDuck, setVoiceDuck] = useState(true);
 
   const [phase, setPhase] = useState<UiPhase>("idle");
   const [progress, setProgress] = useState<ProgressEvent | null>(null);
@@ -65,6 +67,8 @@ function App() {
         setBgmVolume(config.bgm.volume);
         setFadeInS(config.bgm.fade_in_s);
         setFadeOutS(config.bgm.fade_out_s);
+        setEndingTailS(config.bgm.ending_tail_s ?? 5.0);
+        setVoiceDuck((config.bgm.voice_duck_db ?? -4.0) < 0);
         setTranscribe(config.transcribe);
         setModel(config.model);
         setOutputDir(config.output_dir);
@@ -151,6 +155,8 @@ function App() {
           bgmVolume,
           fadeInS,
           fadeOutS,
+          endingTailS,
+          voiceDuckDb: voiceDuck ? -4.0 : 0.0,
           preset,
           transcribe,
           model,
@@ -228,18 +234,47 @@ function App() {
         </div>
 
         {bgm && (
-          <div className="field">
-            <label>BGM 音量: {(bgmVolume * 100).toFixed(0)}%</label>
-            <input
-              type="range"
-              min="0.03"
-              max="0.5"
-              step="0.01"
-              value={bgmVolume}
-              onChange={(e) => setBgmVolume(Number(e.target.value))}
-              disabled={running}
-            />
-          </div>
+          <>
+            <div className="field">
+              <label>BGM 音量: {(bgmVolume * 100).toFixed(0)}%</label>
+              <input
+                type="range"
+                min="0.03"
+                max="0.5"
+                step="0.01"
+                value={bgmVolume}
+                onChange={(e) => setBgmVolume(Number(e.target.value))}
+                disabled={running}
+              />
+            </div>
+            <div className="field">
+              <label>
+                エンディングの余韻: {endingTailS.toFixed(0)}秒
+                {endingTailS === 0 && " (なし)"}
+              </label>
+              <input
+                type="range"
+                min="0"
+                max="15"
+                step="1"
+                value={endingTailS}
+                onChange={(e) => setEndingTailS(Number(e.target.value))}
+                disabled={running}
+              />
+              <p className="hint">会話終了後に BGM だけを残してフェードアウトします</p>
+            </div>
+            <div className="field">
+              <label className="row">
+                <input
+                  type="checkbox"
+                  checked={voiceDuck}
+                  onChange={(e) => setVoiceDuck(e.target.checked)}
+                  disabled={running}
+                />
+                声の帯域で BGM を下げる (聞き取りやすくなります)
+              </label>
+            </div>
+          </>
         )}
 
         <div className="field">

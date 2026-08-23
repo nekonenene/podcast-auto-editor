@@ -4,6 +4,8 @@ export interface BgmOpts {
   volume: number;
   fade_in_s: number;
   fade_out_s: number;
+  ending_tail_s: number;
+  voice_duck_db: number;
 }
 
 export interface AppConfig {

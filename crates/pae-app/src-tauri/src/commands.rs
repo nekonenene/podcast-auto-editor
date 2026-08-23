@@ -54,6 +54,8 @@ pub struct JobRequest {
     pub bgm_volume: f32,
     pub fade_in_s: f32,
     pub fade_out_s: f32,
+    pub ending_tail_s: f32,
+    pub voice_duck_db: f32,
     pub preset: String,
     pub transcribe: bool,
     pub model: String,
@@ -171,14 +173,16 @@ fn build_spec_and_save_defaults(request: &JobRequest) -> Result<JobSpec, String>
     config.bgm.volume = request.bgm_volume;
     config.bgm.fade_in_s = request.fade_in_s;
     config.bgm.fade_out_s = request.fade_out_s;
+    config.bgm.ending_tail_s = request.ending_tail_s;
+    config.bgm.voice_duck_db = request.voice_duck_db;
     config.preset = request.preset.clone();
     config.model = request.model.clone();
     config.transcribe = request.transcribe;
     config.output_dir = Some(request.output_dir.clone());
     config.save().map_err(|e| e.to_string())?;
 
-    let preset =
-        Preset::by_name(&request.preset).ok_or_else(|| format!("未知のプリセット: {}", request.preset))?;
+    let preset = Preset::by_name(&request.preset)
+        .ok_or_else(|| format!("未知のプリセット: {}", request.preset))?;
 
     Ok(JobSpec {
         input: request.input.clone(),

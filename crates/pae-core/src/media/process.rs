@@ -13,8 +13,12 @@ use super::ffmpeg::Ffmpeg;
 /// keep_ranges (ミリ秒) から select/aselect 用のフィルタスクリプトを生成する。
 ///
 /// カット後に setpts / asetpts でタイムスタンプをゼロから振り直すこと、
-/// aresample=async=1 で微小なギャップを吸収することが音ズレ防止の要点
-pub fn build_cut_filter_script(keep_ranges_ms: &[(u64, u64)]) -> String {
+/// aresample=async=1 で微小なギャップを吸収することが音ズレ防止の要点。
+///
+/// `tail_ms` を指定すると末尾に「余韻」を足す。映像は最終フレームの静止
+/// (tpad clone)、音声は無音のパディングで、あとから BGM だけが数秒残って
+/// フェードアウトする Podcast らしいエンディングを作るために使う
+pub fn build_cut_filter_script(keep_ranges_ms: &[(u64, u64)], tail_ms: u64) -> String {
     let expr: Vec<String> = keep_ranges_ms
         .iter()
         .map(|(start, end)| {
@@ -26,9 +30,18 @@ pub fn build_cut_filter_script(keep_ranges_ms: &[(u64, u64)]) -> String {
         })
         .collect();
     let expr = expr.join("+");
+    let (video_tail, audio_tail) = if tail_ms > 0 {
+        let tail_s = tail_ms as f64 / 1000.0;
+        (
+            format!(",tpad=stop_duration={tail_s:.3}:stop_mode=clone"),
+            format!(",apad=pad_dur={tail_s:.3}"),
+        )
+    } else {
+        (String::new(), String::new())
+    };
     format!(
-        "[0:v]select='{expr}',setpts=N/FRAME_RATE/TB[v];\n\
-         [0:a]aselect='{expr}',asetpts=N/SR/TB,aresample=async=1[a]\n"
+        "[0:v]select='{expr}',setpts=N/FRAME_RATE/TB{video_tail}[v];\n\
+         [0:a]aselect='{expr}',asetpts=N/SR/TB,aresample=async=1{audio_tail}[a]\n"
     )
 }
 
@@ -70,6 +83,7 @@ pub fn cut_video(
     keep_ranges_ms: &[(u64, u64)],
     output: &Path,
     output_duration_ms: u64,
+    tail_ms: u64,
     encode: &VideoEncodeOpts,
     on_progress: &mut dyn FnMut(f32),
     cancel: &CancelToken,
@@ -80,7 +94,7 @@ pub fn cut_video(
         ));
     }
 
-    let script = build_cut_filter_script(keep_ranges_ms);
+    let script = build_cut_filter_script(keep_ranges_ms, tail_ms);
     let script_file = tempfile::Builder::new()
         .prefix("pae-filter-")
         .suffix(".txt")
@@ -125,16 +139,40 @@ pub fn cut_video(
 pub struct BgmOpts {
     /// BGM の音量（会話音声に対する倍率）。0.15 = 約 -16.5dB
     pub volume: f32,
+    #[serde(default = "default_fade_in")]
     pub fade_in_s: f32,
+    #[serde(default = "default_fade_out")]
     pub fade_out_s: f32,
+    /// 会話終了後に BGM だけを残す余韻の長さ (秒)。フェードアウトはこの中で行う
+    #[serde(default = "default_ending_tail")]
+    pub ending_tail_s: f32,
+    /// 声の中心帯域 (2.5kHz 付近) で BGM を下げる量 (dB, 負の値)。
+    /// 会話の聞き取りやすさを上げる。0 で無効
+    #[serde(default = "default_voice_duck")]
+    pub voice_duck_db: f32,
+}
+
+fn default_fade_in() -> f32 {
+    2.0
+}
+fn default_fade_out() -> f32 {
+    4.0
+}
+fn default_ending_tail() -> f32 {
+    5.0
+}
+fn default_voice_duck() -> f32 {
+    -4.0
 }
 
 impl Default for BgmOpts {
     fn default() -> Self {
         Self {
             volume: 0.15,
-            fade_in_s: 2.0,
-            fade_out_s: 4.0,
+            fade_in_s: default_fade_in(),
+            fade_out_s: default_fade_out(),
+            ending_tail_s: default_ending_tail(),
+            voice_duck_db: default_voice_duck(),
         }
     }
 }
@@ -142,13 +180,23 @@ impl Default for BgmOpts {
 /// BGM ミックス用のフィルタ式を生成する。
 ///
 /// - `-stream_loop -1` により BGM は入力段で無限ループしている前提
-/// - amix の duration=first で本編の長さに合わせて終了する
+/// - amix の duration=first で本編 (余韻パディング込み) の長さに合わせて終了する
 /// - normalize=0 にしないと amix が会話音声の音量を半分に下げてしまう
+/// - voice_duck_db が負なら、声の中心帯域 (2.5kHz 付近・2オクターブ幅) の
+///   BGM だけを下げて会話を聞き取りやすくする。声側は加工しない
 pub fn build_bgm_filter(main_duration_ms: u64, opts: &BgmOpts) -> String {
     let duration_s = main_duration_ms as f64 / 1000.0;
     let fade_out_start = (duration_s - opts.fade_out_s as f64).max(0.0);
+    let duck = if opts.voice_duck_db < 0.0 {
+        format!(
+            ",equalizer=f=2500:width_type=o:w=2:g={:.1}",
+            opts.voice_duck_db
+        )
+    } else {
+        String::new()
+    };
     format!(
-        "[1:a]volume={volume},afade=t=in:st=0:d={fade_in},afade=t=out:st={fade_out_start:.3}:d={fade_out}[bgm];\
+        "[1:a]volume={volume}{duck},afade=t=in:st=0:d={fade_in},afade=t=out:st={fade_out_start:.3}:d={fade_out}[bgm];\
          [0:a][bgm]amix=inputs=2:duration=first:normalize=0[a]",
         volume = opts.volume,
         fade_in = opts.fade_in_s,
@@ -344,7 +392,7 @@ mod tests {
 
     #[test]
     fn cut_filter_script_snapshot() {
-        let script = build_cut_filter_script(&[(0, 2200), (5000, 6000)]);
+        let script = build_cut_filter_script(&[(0, 2200), (5000, 6000)], 0);
         insta::assert_snapshot!(script, @r"
         [0:v]select='between(t,0.000,2.200)+between(t,5.000,6.000)',setpts=N/FRAME_RATE/TB[v];
         [0:a]aselect='between(t,0.000,2.200)+between(t,5.000,6.000)',asetpts=N/SR/TB,aresample=async=1[a]
@@ -352,9 +400,37 @@ mod tests {
     }
 
     #[test]
+    fn cut_filter_script_with_ending_tail() {
+        let script = build_cut_filter_script(&[(0, 2200)], 5000);
+        insta::assert_snapshot!(script, @r"
+        [0:v]select='between(t,0.000,2.200)',setpts=N/FRAME_RATE/TB,tpad=stop_duration=5.000:stop_mode=clone[v];
+        [0:a]aselect='between(t,0.000,2.200)',asetpts=N/SR/TB,aresample=async=1,apad=pad_dur=5.000[a]
+        ");
+    }
+
+    #[test]
     fn bgm_filter_snapshot() {
         let filter = build_bgm_filter(60_000, &BgmOpts::default());
-        insta::assert_snapshot!(filter, @"[1:a]volume=0.15,afade=t=in:st=0:d=2,afade=t=out:st=56.000:d=4[bgm];[0:a][bgm]amix=inputs=2:duration=first:normalize=0[a]");
+        insta::assert_snapshot!(filter, @"[1:a]volume=0.15,equalizer=f=2500:width_type=o:w=2:g=-4.0,afade=t=in:st=0:d=2,afade=t=out:st=56.000:d=4[bgm];[0:a][bgm]amix=inputs=2:duration=first:normalize=0[a]");
+    }
+
+    #[test]
+    fn bgm_filter_without_duck() {
+        let opts = BgmOpts {
+            voice_duck_db: 0.0,
+            ..BgmOpts::default()
+        };
+        let filter = build_bgm_filter(60_000, &opts);
+        assert!(!filter.contains("equalizer"));
+    }
+
+    /// 旧バージョンの config.toml (新フィールドなし) も読めること
+    #[test]
+    fn bgm_opts_deserializes_legacy_config() {
+        let opts: BgmOpts =
+            toml::from_str("volume = 0.1\nfade_in_s = 2.0\nfade_out_s = 4.0\n").unwrap();
+        assert_eq!(opts.ending_tail_s, 5.0);
+        assert_eq!(opts.voice_duck_db, -4.0);
     }
 
     #[test]

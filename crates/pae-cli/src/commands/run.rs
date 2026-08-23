@@ -31,6 +31,14 @@ pub struct CommonOpts {
     #[arg(long)]
     pub fade_out: Option<f32>,
 
+    /// 会話終了後に BGM だけを残す余韻の長さ (秒, 0 で無効)
+    #[arg(long)]
+    pub ending_tail: Option<f32>,
+
+    /// 声の帯域で BGM を下げる量 (dB, 負の値。0 で無効)
+    #[arg(long)]
+    pub bgm_duck: Option<f32>,
+
     /// ラウドネスターゲット (LUFS, 例: -16)
     #[arg(long)]
     pub lufs: Option<f64>,
@@ -96,6 +104,12 @@ pub fn build_spec(
     }
     if let Some(v) = opts.fade_out {
         spec.bgm_opts.fade_out_s = v;
+    }
+    if let Some(v) = opts.ending_tail {
+        spec.bgm_opts.ending_tail_s = v;
+    }
+    if let Some(v) = opts.bgm_duck {
+        spec.bgm_opts.voice_duck_db = v;
     }
     if let Some(v) = opts.lufs {
         spec.target_lufs = v;
