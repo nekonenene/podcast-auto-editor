@@ -19,7 +19,7 @@ Google Meet などで録画したポッドキャスト動画（もしくは音�
 ## 対応 OS
 
 - macOS (Apple Silicon) — 対応
-- Windows — 未対応。将来対応予定の構成にしています
+- Windows — 開発モードでの動作に対応。セットアップは [docs/windows-setup.md](docs/windows-setup.md) を参照
 
 ## 現在の状態
 
@@ -32,11 +32,14 @@ FFmpeg の sidecar 同梱・アプリ配布用ビルドは今後対応予定で�
 - Node.js（デスクトップ GUI の開発に必要）
 - ffmpeg / ffprobe（開発中は Homebrew 等のものを使います）
 - cmake（whisper.cpp のビルドに必要）
-- Xcode Command Line Tools
+- Xcode Command Line Tools（macOS の場合）
 
 ```bash
 brew install ffmpeg cmake
 ```
+
+Windows でのセットアップ手順は [docs/windows-setup.md](docs/windows-setup.md) を参照してください。
+NVIDIA GPU があれば `cuda` feature で文字起こしを高速化できます。
 
 ## デスクトップアプリの起動
 
@@ -98,7 +101,8 @@ cargo run -p pae-cli -- render input.mp4 -t timeline.json -o output
 ### 文字起こしモデル
 
 初回利用時に自動でダウンロードされ、  
-`~/Library/Application Support/net.hatone.PodcastAutoEditor/models/` に保存されます。
+macOS では `~/Library/Application Support/net.hatone.PodcastAutoEditor/models/`、  
+Windows では `%LOCALAPPDATA%\hatone\PodcastAutoEditor\data\models\` に保存されます。
 
 ```bash
 cargo run -p pae-cli -- models list      # 一覧と状態
@@ -134,7 +138,8 @@ cargo clippy --all-targets
 
 ## 設定ファイル
 
-`~/Library/Application Support/net.hatone.PodcastAutoEditor/config.toml` に保存されます。  
+macOS では `~/Library/Application Support/net.hatone.PodcastAutoEditor/config.toml`、  
+Windows では `%APPDATA%\hatone\PodcastAutoEditor\config\config.toml` に保存されます。  
 デフォルト BGM・音量・プリセット・モデルなどを記憶します。
 
 ## 処理時間の目安

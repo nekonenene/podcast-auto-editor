@@ -15,7 +15,18 @@ whisper.cpp (whisper-rs) + large-v3-turbo q5_0 をデフォルトにした。
 
 - モデルは初回利用時に Hugging Face からダウンロードし、
   `~/Library/Application Support/net.hatone.PodcastAutoEditor/models/` にキャッシュする。
+  Windows は `%LOCALAPPDATA%` 配下 (data_local_dir)。574MB のモデルが
+  ドメイン環境でログオン同期される Roaming (data_dir) を避けるため。
 - モデル追加は `crates/pae-core/src/transcribe/model.rs` の `MODELS` に1エントリ足すだけ。
+
+### GPU 推論
+
+- macOS: Metal を常時有効（target 依存の feature 指定なのでビルド環境の追加要件なし）
+- Windows / Linux: `cuda` feature の opt-in（要 CUDA Toolkit + NVIDIA GPU）。
+  CUDA Toolkit が無い環境でもビルドできるよう、target 依存での無条件付与にはしていない。
+  feature は pae-cli / pae-app → pae-core → whisper-rs へと伝播する。
+  whisper.cpp は GPU ビルドならデフォルトで GPU を使うためコード変更は不要。
+  feature なしでは CPU 推論になり、Apple Silicon の Metal より大幅に遅い
 
 ### whisper-rs 0.16 の既知バグ
 
@@ -48,6 +59,9 @@ threshold 0.4 / min_speech 100ms / min_silence 250ms / padding 前150ms・後250
   汎用の `-/filter_complex <file>` 構文に変わった
 - エンコーダ: macOS は h264_videotoolbox（Media Engine、x264 比約4倍速）。
   品質は同ビットレートで x264 に劣るためビットレートを多めにしている (720p: 4M, 1080p: 6M)
+- Windows は h264_mf（Media Foundation）。LGPL ビルドの ffmpeg に libx264 が入らないため。
+  ビットレート表は videotoolbox 用に盛った値をそのまま流用している。
+  CI の Windows ランナーにはハードウェアエンコーダが無いため、統合テストは libx264 に固定している
 
 ## FFmpeg の配布とライセンス（Phase 3 で対応）
 

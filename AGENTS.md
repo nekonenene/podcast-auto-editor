@@ -11,7 +11,7 @@
 ## アプリ概要
 
 Google Meet 等の録画から、長すぎる無音を自然に短縮し、BGM追加とローカル文字起こしをおこなうデスクトップアプリ。
-macOS / Apple Silicon を最優先とする。
+macOS / Apple Silicon を最優先としつつ、Windows でも開発モードで動作する（`docs/windows-setup.md` 参照）。
 
 ## 重要な方針
 
@@ -27,7 +27,7 @@ macOS / Apple Silicon を最優先とする。
 
 - コア/CLI: Rust (Cargo workspace)。GUI は Tauri 2 + React + TS (crates/pae-app)
 - VAD: Silero VAD (`voice_activity_detector` crate)
-- 文字起こし: whisper.cpp (`whisper-rs`, Metal)。デフォルトモデル large-v3-turbo q5_0
+- 文字起こし: whisper.cpp (`whisper-rs`)。macOS は Metal、Windows は `cuda` feature で GPU 推論。デフォルトモデル large-v3-turbo q5_0
 - メディア処理: ffmpeg 外部プロセス（開発時は PATH の ffmpeg、配布時は sidecar 予定）
 
 ## コマンド
