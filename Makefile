@@ -4,7 +4,7 @@
 
 .PHONY: help
 help: ## このヘルプを表示する
-	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-10s\033[0m %s\n", $$1, $$2}'
+	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
 
 .PHONY: up
 up: ## 開発環境の準備 (GUI の npm 依存をインストールする)
@@ -21,6 +21,14 @@ run-dev-cuda: ## CUDA 有効でデスクトップアプリを起動する (要 N
 .PHONY: build
 build: ## ワークスペース全体をビルドする
 	cargo build
+
+.PHONY: build-exe
+build-exe: ## 配布用の exe とインストーラーを作る
+	cd crates/pae-app && npm run tauri build
+
+.PHONY: build-exe-cuda
+build-exe-cuda: ## CUDA 有効で配布用の exe とインストーラーを作る (要 NVIDIA GPU + CUDA Toolkit)
+	cd crates/pae-app && npm run tauri -- build --features cuda
 
 .PHONY: test
 test: ## ユニットテストと統合テストを実行する (ffmpeg 必須)

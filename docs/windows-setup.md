@@ -1,7 +1,8 @@
 # Windows での開発環境セットアップ
 
 Windows 上で開発モード（`cargo` / `npm`）でアプリを動かすための手順です。  
-インストーラーでの配布はまだ対応していません。
+自分用の exe を作る手順も後半にありますが、ffmpeg を同梱しないため、  
+他のマシンへそのまま配布することはまだできません。
 
 ## コマンドはどこで実行するか
 
@@ -130,6 +131,36 @@ cargo run -p pae-cli --features cuda -- run input.mp4 -o output
 cargo run -p pae-cli -- analyze input.mp4
 ```
 
+## 配布用の exe を作る
+
+開発モードではなく、ダブルクリックで起動できる実行ファイルを作れます。
+
+```bash
+make build-exe-cuda # CUDA を有効にする場合
+make build-exe      # CUDA を使わない場合
+```
+
+必要な環境変数と Developer PowerShell の条件は、開発モードと同じです。  
+初回は Tauri が WiX と NSIS を自動でダウンロードするため、時間がかかります。
+
+生成物は次の場所に出ます。
+
+| 生成物 | 場所 |
+| --- | --- |
+| 実行ファイル | `target/release/pae-app.exe` |
+| MSI インストーラー | `target/release/bundle/msi/` |
+| NSIS インストーラー | `target/release/bundle/nsis/` |
+
+### 他のマシンへ渡す場合の注意
+
+作った exe は ffmpeg を同梱していません。  
+起動時に PATH や既知のディレクトリから探す作りのため、  
+自分のマシンでは動きますが、ffmpeg が入っていないマシンでは動きません。
+
+`--features cuda` を付けた exe は、さらに CUDA のランタイム DLL を必要とします。  
+CUDA Toolkit が入っていないマシンでは起動しないため、  
+渡す相手を選ばないようにするなら CUDA 無しでビルドしてください。
+
 ## make が無い環境でのコマンド対応表
 
 Makefile のターゲットは以下の生コマンドに対応します。  
@@ -146,6 +177,8 @@ Windows 標準の PowerShell 5.1 は `&&` でのコマンド連結に対応し�
 | `make run-dev` | `cd crates/pae-app && npm run tauri dev` |
 | `make run-dev-cuda` | `cd crates/pae-app && npm run tauri -- dev --features cuda` |
 | `make build` | `cargo build` |
+| `make build-exe` | `cd crates/pae-app && npm run tauri build` |
+| `make build-exe-cuda` | `cd crates/pae-app && npm run tauri -- build --features cuda` |
 | `make test` | `cargo test` |
 | `make test-all` | `cargo test` のあと `cargo test -p pae-core -- --ignored` |
 | `make fmt` | `cargo fmt` |
