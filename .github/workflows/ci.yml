@@ -1,0 +1,57 @@
+# macOS と Windows でビルドとテストを検証する。
+# パブリックリポジトリのため標準ランナーの利用時間は無料
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # 統合テストに ffmpeg / ffprobe が必要。
+      # このアクションは libx264 入りのビルドをキャッシュ付きで入れてくれる
+      - uses: FedericoCarboni/setup-ffmpeg@v3
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: crates/pae-app/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      # whisper.cpp の CMake 成果物や ONNX Runtime のダウンロードバイナリは
+      # target/ 配下に置かれるため、このキャッシュで2回目以降が大幅に速くなる
+      - uses: Swatinem/rust-cache@v2
+
+      - name: npm ci
+        working-directory: crates/pae-app
+        run: npm ci
+
+      # tsc の型チェックを兼ねる。
+      # tauri::generate_context! が dist/ を埋め込むため clippy / test より先に実行する
+      - name: フロントエンドのビルド
+        working-directory: crates/pae-app
+        run: npm run build
+
+      - name: フォーマット確認
+        run: cargo fmt --check
+
+      - name: clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      # モデルダウンロードが必要なテスト (--ignored) と CUDA ビルドは
+      # ランナーに GPU が無くコストも高いため CI では実行しない
+      - name: テスト
+        run: cargo test --workspace
