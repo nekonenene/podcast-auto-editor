@@ -36,13 +36,20 @@ function formatDuration(ms: number): string {
   return `${m}分${String(s).padStart(2, "0")}秒`;
 }
 
+// パス操作は Windows の "\" と macOS/Linux の "/" の両方に対応する
+
 function fileName(path: string): string {
-  return path.split("/").pop() ?? path;
+  return path.split(/[\\/]/).pop() ?? path;
 }
 
 function parentDir(path: string): string {
-  const index = path.lastIndexOf("/");
+  const index = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
   return index > 0 ? path.slice(0, index) : path;
+}
+
+function joinPath(dir: string, name: string): string {
+  const separator = dir.includes("\\") ? "\\" : "/";
+  return `${dir}${separator}${name}`;
 }
 
 function extensionOf(path: string): string {
@@ -113,7 +120,7 @@ function App() {
     setWaveform(null);
     setPreviewSrc(null);
     // 出力先が未設定なら、動画と同じ場所の podcast-output をデフォルトにする
-    setOutputDir((current) => current ?? `${parentDir(path)}/podcast-output`);
+    setOutputDir((current) => current ?? joinPath(parentDir(path), "podcast-output"));
     try {
       const info = await invoke<MediaInfo>("probe_media", { path });
       setVideoInfo(info);
