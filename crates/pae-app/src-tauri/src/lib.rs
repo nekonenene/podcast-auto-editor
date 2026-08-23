@@ -21,6 +21,7 @@ pub fn run() {
             commands::list_models,
             commands::probe_media,
             commands::start_job,
+            commands::bgm_preview,
             commands::cancel_job,
             commands::reveal_path,
         ])

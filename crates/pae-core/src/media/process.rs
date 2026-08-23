@@ -187,21 +187,77 @@ impl Default for BgmOpts {
 pub fn build_bgm_filter(main_duration_ms: u64, opts: &BgmOpts) -> String {
     let duration_s = main_duration_ms as f64 / 1000.0;
     let fade_out_start = (duration_s - opts.fade_out_s as f64).max(0.0);
-    let duck = if opts.voice_duck_db < 0.0 {
+    format!(
+        "[1:a]volume={volume}{duck},afade=t=in:st=0:d={fade_in},afade=t=out:st={fade_out_start:.3}:d={fade_out}[bgm];\
+         [0:a][bgm]amix=inputs=2:duration=first:normalize=0[a]",
+        volume = opts.volume,
+        duck = duck_filter(opts),
+        fade_in = opts.fade_in_s,
+        fade_out = opts.fade_out_s,
+    )
+}
+
+fn duck_filter(opts: &BgmOpts) -> String {
+    if opts.voice_duck_db < 0.0 {
         format!(
             ",equalizer=f=2500:width_type=o:w=2:g={:.1}",
             opts.voice_duck_db
         )
     } else {
         String::new()
-    };
+    }
+}
+
+/// BGM 音量プレビュー用のフィルタ式。フェードは掛けず、
+/// 音量と EQ のバランスだけを本番と同じ設定で確認する
+pub fn build_bgm_preview_filter(opts: &BgmOpts) -> String {
     format!(
-        "[1:a]volume={volume}{duck},afade=t=in:st=0:d={fade_in},afade=t=out:st={fade_out_start:.3}:d={fade_out}[bgm];\
+        "[1:a]volume={volume}{duck}[bgm];\
          [0:a][bgm]amix=inputs=2:duration=first:normalize=0[a]",
         volume = opts.volume,
-        fade_in = opts.fade_in_s,
-        fade_out = opts.fade_out_s,
+        duck = duck_filter(opts),
     )
+}
+
+/// 入力動画の一部分と BGM を現在の設定でミックスした試聴用の音声を生成する。
+/// 音声だけの処理なので短時間で終わり、GUI の音量スライダー調整に使う
+#[allow(clippy::too_many_arguments)]
+pub fn render_bgm_preview(
+    ffmpeg: &Ffmpeg,
+    input: &Path,
+    bgm: &Path,
+    opts: &BgmOpts,
+    start_ms: u64,
+    duration_ms: u64,
+    output: &Path,
+    cancel: &CancelToken,
+) -> Result<()> {
+    if !bgm.exists() {
+        return Err(PaeError::InputNotFound(bgm.to_path_buf()));
+    }
+    let args: Vec<String> = vec![
+        "-ss".into(),
+        format!("{:.3}", start_ms as f64 / 1000.0),
+        "-t".into(),
+        format!("{:.3}", duration_ms as f64 / 1000.0),
+        "-i".into(),
+        input.display().to_string(),
+        "-stream_loop".into(),
+        "-1".into(),
+        "-i".into(),
+        bgm.display().to_string(),
+        "-filter_complex".into(),
+        build_bgm_preview_filter(opts),
+        "-map".into(),
+        "[a]".into(),
+        "-c:a".into(),
+        "libmp3lame".into(),
+        "-q:a".into(),
+        "4".into(),
+        output.display().to_string(),
+    ];
+    ffmpeg.run(&args, None, &mut |_| {}, cancel)?;
+    Ok(())
 }
 
 /// 編集済み動画に BGM をループ・フェード付きでミックスする。映像は無劣化コピー
@@ -412,6 +468,12 @@ mod tests {
     fn bgm_filter_snapshot() {
         let filter = build_bgm_filter(60_000, &BgmOpts::default());
         insta::assert_snapshot!(filter, @"[1:a]volume=0.15,equalizer=f=2500:width_type=o:w=2:g=-4.0,afade=t=in:st=0:d=2,afade=t=out:st=56.000:d=4[bgm];[0:a][bgm]amix=inputs=2:duration=first:normalize=0[a]");
+    }
+
+    #[test]
+    fn bgm_preview_filter_snapshot() {
+        let filter = build_bgm_preview_filter(&BgmOpts::default());
+        insta::assert_snapshot!(filter, @"[1:a]volume=0.15,equalizer=f=2500:width_type=o:w=2:g=-4.0[bgm];[0:a][bgm]amix=inputs=2:duration=first:normalize=0[a]");
     }
 
     #[test]

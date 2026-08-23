@@ -205,6 +205,58 @@ fn build_spec_and_save_defaults(request: &JobRequest) -> Result<JobSpec, String>
     })
 }
 
+/// BGM 音量プレビューのリクエスト
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BgmPreviewRequest {
+    pub input: PathBuf,
+    pub bgm: PathBuf,
+    pub bgm_volume: f32,
+    pub voice_duck_db: f32,
+}
+
+/// 入力動画の一部と BGM を現在の設定でミックスした試聴用 MP3 を生成し、
+/// バイト列で返す。フロントエンドは Blob にして <audio> で再生する
+#[tauri::command]
+pub async fn bgm_preview(request: BgmPreviewRequest) -> Result<tauri::ipc::Response, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let config = AppConfig::load().map_err(|e| e.to_string())?;
+        let ffmpeg = Ffmpeg::locate(config.ffmpeg_dir.as_deref()).map_err(|e| e.to_string())?;
+        let info = probe(&ffmpeg, &request.input).map_err(|e| e.to_string())?;
+
+        // 冒頭は挨拶前の無音が多いので、会話が始まっていそうな
+        // 全体の3割地点から15秒を試聴に使う
+        let duration_ms = 15_000.min(info.duration_ms);
+        let start_ms = ((info.duration_ms as f64 * 0.3) as u64)
+            .min(info.duration_ms.saturating_sub(duration_ms));
+
+        let opts = pae_core::media::process::BgmOpts {
+            volume: request.bgm_volume,
+            voice_duck_db: request.voice_duck_db,
+            ..config.bgm.clone()
+        };
+
+        let dir = tempfile::tempdir().map_err(|e| e.to_string())?;
+        let out = dir.path().join("preview.mp3");
+        pae_core::media::process::render_bgm_preview(
+            &ffmpeg,
+            &request.input,
+            &request.bgm,
+            &opts,
+            start_ms,
+            duration_ms,
+            &out,
+            &CancelToken::new(),
+        )
+        .map_err(|e| e.to_string())?;
+
+        let bytes = std::fs::read(&out).map_err(|e| e.to_string())?;
+        Ok(tauri::ipc::Response::new(bytes))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[tauri::command]
 pub fn cancel_job(state: State<'_, JobState>) {
     if let Some(token) = state.0.lock().expect("job state lock").as_ref() {

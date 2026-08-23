@@ -72,6 +72,23 @@ h1 {
   border-color: #0a84ff;
 }
 
+.preview {
+  flex-shrink: 0;
+  border: 1px solid #0a84ff;
+  border-radius: 8px;
+  padding: 6px 14px;
+  background: transparent;
+  color: #0a84ff;
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.preview:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
 .clear {
   border: none;
   background: transparent;

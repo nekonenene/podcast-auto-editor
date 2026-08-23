@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -52,6 +52,11 @@ function App() {
   const [fadeOutS, setFadeOutS] = useState(4.0);
   const [endingTailS, setEndingTailS] = useState(5.0);
   const [voiceDuck, setVoiceDuck] = useState(true);
+
+  const [previewing, setPreviewing] = useState(false);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const previewAudioRef = useRef<HTMLAudioElement | null>(null);
+  const previewUrlRef = useRef<string | null>(null);
 
   const [phase, setPhase] = useState<UiPhase>("idle");
   const [progress, setProgress] = useState<ProgressEvent | null>(null);
@@ -136,8 +141,59 @@ function App() {
     if (typeof path === "string") setOutputDir(path);
   };
 
+  const stopPreview = useCallback(() => {
+    previewAudioRef.current?.pause();
+    previewAudioRef.current = null;
+    if (previewUrlRef.current) {
+      URL.revokeObjectURL(previewUrlRef.current);
+      previewUrlRef.current = null;
+    }
+    setPreviewing(false);
+  }, []);
+
+  // 現在の設定で試聴用ミックスを生成してループ再生する
+  const playPreview = useCallback(async () => {
+    if (!video || !bgm) return;
+    setPreviewLoading(true);
+    try {
+      const data = await invoke<ArrayBuffer>("bgm_preview", {
+        request: {
+          input: video,
+          bgm,
+          bgmVolume,
+          voiceDuckDb: voiceDuck ? -4.0 : 0.0,
+        },
+      });
+      stopPreview();
+      const url = URL.createObjectURL(
+        new Blob([data], { type: "audio/mpeg" }),
+      );
+      const audio = new Audio(url);
+      audio.loop = true;
+      await audio.play();
+      previewAudioRef.current = audio;
+      previewUrlRef.current = url;
+      setPreviewing(true);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setPreviewLoading(false);
+    }
+  }, [video, bgm, bgmVolume, voiceDuck, stopPreview]);
+
+  // 試聴中に音量や EQ を変えたら、少し待ってから作り直して反映する
+  useEffect(() => {
+    if (!previewing) return;
+    const timer = setTimeout(() => {
+      void playPreview();
+    }, 400);
+    return () => clearTimeout(timer);
+    // playPreview は設定値に依存しているため、設定変更のたびに発火する
+  }, [bgmVolume, voiceDuck]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const start = async () => {
     if (!video || !outputDir) return;
+    stopPreview();
     setPhase("running");
     setError(null);
     setResult(null);
@@ -237,15 +293,30 @@ function App() {
           <>
             <div className="field">
               <label>BGM 音量: {(bgmVolume * 100).toFixed(0)}%</label>
-              <input
-                type="range"
-                min="0.03"
-                max="0.5"
-                step="0.01"
-                value={bgmVolume}
-                onChange={(e) => setBgmVolume(Number(e.target.value))}
-                disabled={running}
-              />
+              <div className="row">
+                <input
+                  type="range"
+                  min="0.03"
+                  max="0.5"
+                  step="0.01"
+                  value={bgmVolume}
+                  onChange={(e) => setBgmVolume(Number(e.target.value))}
+                  disabled={running}
+                />
+                <button
+                  className="preview"
+                  onClick={() => (previewing ? stopPreview() : void playPreview())}
+                  disabled={running || !video || previewLoading}
+                  title="動画の一部と BGM を現在の設定でミックスして試聴します"
+                >
+                  {previewLoading ? "生成中..." : previewing ? "■ 停止" : "▶ 試聴"}
+                </button>
+              </div>
+              {previewing && (
+                <p className="hint">
+                  試聴中 (ループ再生)。スライダーを動かすと反映されます
+                </p>
+              )}
             </div>
             <div className="field">
               <label>
