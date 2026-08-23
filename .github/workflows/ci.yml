@@ -1,6 +1,8 @@
 # Windows でのビルドとテストを検証する。
 # macOS は開発環境そのもので検証されるため CI には含めない。
-# 必要になったら matrix で macos-latest を足せば両対応に戻せる
+# macOS を CI に戻す場合は matrix 化だけでは不十分で、ffmpeg の導入方法にも注意。
+# setup-ffmpeg アクションは x64 専用で Apple Silicon ランナーでは失敗するため、
+# macOS 側は brew install ffmpeg にする必要がある (コミット 813b4cb に当時の対応がある)
 name: CI
 
 on:
