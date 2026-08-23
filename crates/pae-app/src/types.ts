@@ -8,6 +8,51 @@ export interface BgmOpts {
   voice_duck_db: number;
 }
 
+export interface OutputSelection {
+  edited_mp4: boolean;
+  podcast_mp3: boolean;
+  timeline_json: boolean;
+  transcript_txt: boolean;
+  transcript_json: boolean;
+  transcript_srt: boolean;
+  transcript_md: boolean;
+}
+
+export const DEFAULT_OUTPUTS: OutputSelection = {
+  edited_mp4: true,
+  podcast_mp3: true,
+  timeline_json: true,
+  transcript_txt: true,
+  transcript_json: true,
+  transcript_srt: true,
+  transcript_md: true,
+};
+
+// 設定画面のグループ分け。文字起こしから作られるファイルは
+// メイン画面の「文字起こし」が ON のときだけ出力される
+export const MEDIA_OUTPUT_KEYS = [
+  "edited_mp4",
+  "podcast_mp3",
+  "timeline_json",
+] as const satisfies readonly (keyof OutputSelection)[];
+
+export const TRANSCRIPT_OUTPUT_KEYS = [
+  "transcript_txt",
+  "transcript_json",
+  "transcript_srt",
+  "transcript_md",
+] as const satisfies readonly (keyof OutputSelection)[];
+
+export const OUTPUT_LABELS: Record<keyof OutputSelection, string> = {
+  edited_mp4: "編集済み動画 (MP4)",
+  podcast_mp3: "Podcast 用音声 (MP3)",
+  timeline_json: "編集タイムライン (JSON)",
+  transcript_txt: "文字起こし (TXT)",
+  transcript_json: "文字起こし (JSON)",
+  transcript_srt: "字幕 (SRT)",
+  transcript_md: "文字起こし (Markdown)",
+};
+
 export interface AppConfig {
   default_bgm: string | null;
   bgm: BgmOpts;
@@ -17,6 +62,7 @@ export interface AppConfig {
   transcribe: boolean;
   target_lufs: number;
   ffmpeg_dir: string | null;
+  outputs: OutputSelection;
 }
 
 export interface MediaInfo {

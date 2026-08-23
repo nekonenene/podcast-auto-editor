@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use serde::Serialize;
 
-use crate::config::AppConfig;
+use crate::config::{AppConfig, OutputSelection};
 use crate::error::{PaeError, Result};
 use crate::media::extract::{extract_analysis_wav, read_wav_samples};
 use crate::media::ffmpeg::Ffmpeg;
@@ -15,7 +15,7 @@ use crate::media::process::{
     apply_loudnorm, cut_video, encode_mp3, measure_loudness, mix_bgm, BgmOpts, LoudnormTarget,
     VideoEncodeOpts,
 };
-use crate::output::{render, TranscriptFormat};
+use crate::output::render;
 use crate::progress::{CancelToken, ProgressReport, ProgressSink, Stage};
 use crate::timeline::{generate_timeline, timeline_to_keep_ranges, validate_timeline};
 use crate::transcribe::model::{find_model, ModelManager};
@@ -35,7 +35,7 @@ pub struct JobSpec {
     pub target_lufs: f64,
     pub transcribe: bool,
     pub model: String,
-    pub formats: Vec<TranscriptFormat>,
+    pub outputs: OutputSelection,
     pub ffmpeg_dir: Option<PathBuf>,
     /// analyze 済みタイムラインを渡すと VAD をスキップして再利用する
     pub timeline: Option<EditTimeline>,
@@ -54,12 +54,7 @@ impl JobSpec {
             target_lufs: config.target_lufs,
             transcribe: config.transcribe,
             model: config.model.clone(),
-            formats: vec![
-                TranscriptFormat::Txt,
-                TranscriptFormat::Json,
-                TranscriptFormat::Srt,
-                TranscriptFormat::Markdown,
-            ],
+            outputs: config.outputs.clone(),
             ffmpeg_dir: config.ffmpeg_dir.clone(),
             timeline: None,
         }
@@ -152,6 +147,14 @@ pub fn run_job(spec: &JobSpec, sink: &dyn ProgressSink, cancel: &CancelToken) ->
     let mut runner = StageRunner::new(sink);
     let mut outputs: Vec<PathBuf> = Vec::new();
 
+    let transcript_formats = spec.outputs.transcript_formats();
+    let want_transcribe = spec.transcribe && !transcript_formats.is_empty();
+    if !spec.outputs.any_selected() {
+        return Err(PaeError::Config(
+            "出力するファイルがひとつも選択されていません。設定を確認してください".into(),
+        ));
+    }
+
     std::fs::create_dir_all(&spec.output_dir)?;
     // 中間ファイル置き場。ドロップ時に自動削除されるため、
     // エラーやキャンセルで途中終了しても一時ファイルは残らない
@@ -200,10 +203,12 @@ pub fn run_job(spec: &JobSpec, sink: &dyn ProgressSink, cancel: &CancelToken) ->
         "タイムラインを生成しました"
     );
 
-    // タイムラインは常に保存する。手修正して `pae render` で再利用できる
-    let timeline_path = output_path(&spec.output_dir, &spec.input, "timeline", "json");
-    std::fs::write(&timeline_path, serde_json::to_string_pretty(&timeline)?)?;
-    outputs.push(timeline_path);
+    // タイムラインを保存しておくと、手修正して `pae render` で再利用できる
+    if spec.outputs.timeline_json {
+        let timeline_path = output_path(&spec.output_dir, &spec.input, "timeline", "json");
+        std::fs::write(&timeline_path, serde_json::to_string_pretty(&timeline)?)?;
+        outputs.push(timeline_path);
+    }
 
     // BGM を付けるときだけ、末尾に BGM の余韻分の静止映像・無音を足す。
     // 会話終了後に BGM だけが残ってフェードアウトするエンディングになる
@@ -255,7 +260,12 @@ pub fn run_job(spec: &JobSpec, sink: &dyn ProgressSink, cancel: &CancelToken) ->
         i: spec.target_lufs,
         ..LoudnormTarget::default()
     };
-    let edited_path = output_path(&spec.output_dir, &spec.input, "edited", "mp4");
+    // MP4 を出力しない設定でも、MP3 や文字起こしの元として完成版は一時的に作る
+    let edited_path = if spec.outputs.edited_mp4 {
+        output_path(&spec.output_dir, &spec.input, "edited", "mp4")
+    } else {
+        temp_dir.path().join("edited.mp4")
+    };
     runner.run(Stage::Loudnorm, |p| {
         let measured = measure_loudness(&ffmpeg, &mixed_path, &target, cancel)?;
         tracing::info!(input_i = %measured.input_i, "ラウドネス測定完了");
@@ -270,17 +280,21 @@ pub fn run_job(spec: &JobSpec, sink: &dyn ProgressSink, cancel: &CancelToken) ->
             cancel,
         )
     })?;
-    outputs.push(edited_path.clone());
+    if spec.outputs.edited_mp4 {
+        outputs.push(edited_path.clone());
+    }
 
-    let mp3_path = output_path(&spec.output_dir, &spec.input, "podcast", "mp3");
-    runner.run(Stage::RenderMp3, |p| {
-        encode_mp3(&ffmpeg, &edited_path, &mp3_path, output_ms, p, cancel)
-    })?;
-    outputs.push(mp3_path);
+    if spec.outputs.podcast_mp3 {
+        let mp3_path = output_path(&spec.output_dir, &spec.input, "podcast", "mp3");
+        runner.run(Stage::RenderMp3, |p| {
+            encode_mp3(&ffmpeg, &edited_path, &mp3_path, output_ms, p, cancel)
+        })?;
+        outputs.push(mp3_path);
+    }
 
     // 文字起こしは編集後の音声に対して行う。
     // タイムスタンプが完成品の MP4 / MP3 と一致し、SRT がそのまま使えるため
-    if spec.transcribe {
+    if want_transcribe {
         let segments = transcribe_media(
             &ffmpeg,
             &edited_path,
@@ -292,7 +306,7 @@ pub fn run_job(spec: &JobSpec, sink: &dyn ProgressSink, cancel: &CancelToken) ->
             cancel,
         )?;
         runner.run(Stage::WriteOutputs, |_| {
-            for format in &spec.formats {
+            for format in &transcript_formats {
                 let path = output_path(
                     &spec.output_dir,
                     &spec.input,

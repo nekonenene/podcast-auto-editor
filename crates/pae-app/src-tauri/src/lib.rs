@@ -18,6 +18,7 @@ pub fn run() {
         .manage(commands::JobState(Mutex::new(None)))
         .invoke_handler(tauri::generate_handler![
             commands::get_config,
+            commands::save_settings,
             commands::list_models,
             commands::probe_media,
             commands::start_job,

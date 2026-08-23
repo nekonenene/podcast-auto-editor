@@ -7,10 +7,18 @@ import type {
   JobResult,
   MediaInfo,
   ModelInfo,
+  OutputSelection,
   ProgressEvent,
   Stage,
 } from "./types";
-import { STAGE_LABELS, STAGE_ORDER } from "./types";
+import {
+  DEFAULT_OUTPUTS,
+  MEDIA_OUTPUT_KEYS,
+  OUTPUT_LABELS,
+  STAGE_LABELS,
+  STAGE_ORDER,
+  TRANSCRIPT_OUTPUT_KEYS,
+} from "./types";
 import "./App.css";
 
 const VIDEO_EXTENSIONS = ["mp4", "mov", "m4v", "webm", "mkv"];
@@ -52,6 +60,8 @@ function App() {
   const [fadeOutS, setFadeOutS] = useState(4.0);
   const [endingTailS, setEndingTailS] = useState(5.0);
   const [voiceDuck, setVoiceDuck] = useState(true);
+  const [outputs, setOutputs] = useState<OutputSelection>(DEFAULT_OUTPUTS);
+  const [showSettings, setShowSettings] = useState(false);
 
   const [previewing, setPreviewing] = useState(false);
   const [previewLoading, setPreviewLoading] = useState(false);
@@ -74,6 +84,7 @@ function App() {
         setFadeOutS(config.bgm.fade_out_s);
         setEndingTailS(config.bgm.ending_tail_s ?? 5.0);
         setVoiceDuck((config.bgm.voice_duck_db ?? -4.0) < 0);
+        setOutputs(config.outputs ?? DEFAULT_OUTPUTS);
         setTranscribe(config.transcribe);
         setModel(config.model);
         setOutputDir(config.output_dir);
@@ -157,12 +168,7 @@ function App() {
     setPreviewLoading(true);
     try {
       const data = await invoke<ArrayBuffer>("bgm_preview", {
-        request: {
-          input: video,
-          bgm,
-          bgmVolume,
-          voiceDuckDb: voiceDuck ? -4.0 : 0.0,
-        },
+        request: { input: video, bgm, bgmVolume },
       });
       stopPreview();
       const url = URL.createObjectURL(
@@ -179,9 +185,9 @@ function App() {
     } finally {
       setPreviewLoading(false);
     }
-  }, [video, bgm, bgmVolume, voiceDuck, stopPreview]);
+  }, [video, bgm, bgmVolume, stopPreview]);
 
-  // 試聴中に音量や EQ を変えたら、少し待ってから作り直して反映する
+  // 試聴中に音量を変えたら、少し待ってから作り直して反映する
   useEffect(() => {
     if (!previewing) return;
     const timer = setTimeout(() => {
@@ -189,7 +195,22 @@ function App() {
     }, 400);
     return () => clearTimeout(timer);
     // playPreview は設定値に依存しているため、設定変更のたびに発火する
-  }, [bgmVolume, voiceDuck]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [bgmVolume]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 設定画面での変更は即座に保存する
+  const saveSettings = useCallback(
+    (nextOutputs: OutputSelection, nextVoiceDuck: boolean) => {
+      setOutputs(nextOutputs);
+      setVoiceDuck(nextVoiceDuck);
+      invoke("save_settings", {
+        update: {
+          outputs: nextOutputs,
+          voiceDuckDb: nextVoiceDuck ? -4.0 : 0.0,
+        },
+      }).catch((e) => setError(String(e)));
+    },
+    [],
+  );
 
   const start = async () => {
     if (!video || !outputDir) return;
@@ -212,7 +233,6 @@ function App() {
           fadeInS,
           fadeOutS,
           endingTailS,
-          voiceDuckDb: voiceDuck ? -4.0 : 0.0,
           preset,
           transcribe,
           model,
@@ -250,10 +270,91 @@ function App() {
 
   const selectedModel = models.find((m) => m.name === model);
   const running = phase === "running";
+  const anyOutputSelected = Object.values(outputs).some(Boolean);
+
+  if (showSettings) {
+    return (
+      <main className="container">
+        <div className="topbar">
+          <button className="back" onClick={() => setShowSettings(false)}>
+            ← 戻る
+          </button>
+          <h1>設定</h1>
+        </div>
+        <section className="form">
+          <div className="field">
+            <label>出力するファイル</label>
+            {MEDIA_OUTPUT_KEYS.map((key) => (
+              <label className="row" key={key}>
+                <input
+                  type="checkbox"
+                  checked={outputs[key]}
+                  onChange={(e) =>
+                    saveSettings(
+                      { ...outputs, [key]: e.target.checked },
+                      voiceDuck,
+                    )
+                  }
+                />
+                {OUTPUT_LABELS[key]}
+              </label>
+            ))}
+            <fieldset className="subgroup">
+              <legend>文字起こしから作られるファイル</legend>
+              <div className="subgroup-body">
+                <p className="hint">
+                  メイン画面の「文字起こし」が ON のときに出力されます
+                </p>
+                {TRANSCRIPT_OUTPUT_KEYS.map((key) => (
+                  <label className="row" key={key}>
+                    <input
+                      type="checkbox"
+                      checked={outputs[key]}
+                      onChange={(e) =>
+                        saveSettings(
+                          { ...outputs, [key]: e.target.checked },
+                          voiceDuck,
+                        )
+                      }
+                    />
+                    {OUTPUT_LABELS[key]}
+                  </label>
+                ))}
+              </div>
+            </fieldset>
+            {!anyOutputSelected && (
+              <p className="hint warning">少なくとも1つ選択してください</p>
+            )}
+          </div>
+          <div className="field">
+            <label>音声処理</label>
+            <label className="row">
+              <input
+                type="checkbox"
+                checked={voiceDuck}
+                onChange={(e) => saveSettings(outputs, e.target.checked)}
+              />
+              声の帯域で BGM を下げる (聞き取りやすくなります)
+            </label>
+          </div>
+        </section>
+      </main>
+    );
+  }
 
   return (
     <main className="container">
-      <h1>Podcast Auto Editor</h1>
+      <div className="topbar">
+        <h1>Podcast Auto Editor</h1>
+        <button
+          className="gear"
+          onClick={() => setShowSettings(true)}
+          disabled={running}
+          title="設定"
+        >
+          ⚙
+        </button>
+      </div>
 
       <section className="form" aria-disabled={running}>
         <div className="field">
@@ -334,17 +435,6 @@ function App() {
               />
               <p className="hint">会話終了後に BGM だけを残してフェードアウトします</p>
             </div>
-            <div className="field">
-              <label className="row">
-                <input
-                  type="checkbox"
-                  checked={voiceDuck}
-                  onChange={(e) => setVoiceDuck(e.target.checked)}
-                  disabled={running}
-                />
-                声の帯域で BGM を下げる (聞き取りやすくなります)
-              </label>
-            </div>
           </>
         )}
 
@@ -408,10 +498,15 @@ function App() {
         <button
           className="start"
           onClick={start}
-          disabled={!video || !outputDir || !videoInfo}
+          disabled={!video || !outputDir || !videoInfo || !anyOutputSelected}
         >
           編集開始
         </button>
+      )}
+      {!anyOutputSelected && (
+        <p className="hint warning">
+          出力ファイルが選択されていません。右上の設定から選んでください
+        </p>
       )}
 
       {running && (

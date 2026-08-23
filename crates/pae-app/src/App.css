@@ -27,7 +27,69 @@ body {
 h1 {
   font-size: 20px;
   text-align: center;
-  margin: 0 0 20px;
+  margin: 0;
+}
+
+.topbar {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 20px;
+  min-height: 32px;
+}
+
+.gear {
+  position: absolute;
+  right: 0;
+  border: none;
+  background: transparent;
+  font-size: 20px;
+  cursor: pointer;
+  color: #8e8e93;
+  padding: 4px;
+}
+
+.gear:hover:not(:disabled) {
+  color: #0a84ff;
+}
+
+.back {
+  position: absolute;
+  left: 0;
+  border: none;
+  background: transparent;
+  color: #0a84ff;
+  font-size: 14px;
+  cursor: pointer;
+  padding: 4px;
+}
+
+.hint.warning {
+  color: #ff9500;
+}
+
+/* fieldset 自体に flex を当てると legend が枠線上に乗らなくなるため、
+   レイアウトは内側の .subgroup-body に持たせる */
+.subgroup {
+  margin: 6px 0 0;
+  padding: 2px 12px 12px;
+  border: 1px solid #b0b0b5;
+  border-radius: 8px;
+}
+
+.subgroup legend {
+  font-size: 13px;
+  font-weight: 600;
+  padding: 0 4px;
+}
+
+.subgroup-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  /* 枠の内外でチェック項目の文字サイズが揃うよう明示する */
+  font-size: 1rem;
 }
 
 .form {
@@ -42,7 +104,8 @@ h1 {
   gap: 6px;
 }
 
-.field > label {
+/* 項目タイトル用。チェックボックス行 (.row) はタイトルではないため除外する */
+.field > label:not(.row) {
   font-weight: 600;
   font-size: 13px;
 }

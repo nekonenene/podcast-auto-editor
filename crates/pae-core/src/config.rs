@@ -6,6 +6,69 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{PaeError, Result};
 use crate::media::process::BgmOpts;
+use crate::output::TranscriptFormat;
+
+/// どの成果物ファイルを出力するかの選択
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct OutputSelection {
+    pub edited_mp4: bool,
+    pub podcast_mp3: bool,
+    pub timeline_json: bool,
+    pub transcript_txt: bool,
+    pub transcript_json: bool,
+    pub transcript_srt: bool,
+    pub transcript_md: bool,
+}
+
+impl Default for OutputSelection {
+    fn default() -> Self {
+        Self {
+            edited_mp4: true,
+            podcast_mp3: true,
+            timeline_json: true,
+            transcript_txt: true,
+            transcript_json: true,
+            transcript_srt: true,
+            transcript_md: true,
+        }
+    }
+}
+
+impl OutputSelection {
+    /// 選択されている文字起こしフォーマットの一覧
+    pub fn transcript_formats(&self) -> Vec<TranscriptFormat> {
+        let mut formats = Vec::new();
+        if self.transcript_txt {
+            formats.push(TranscriptFormat::Txt);
+        }
+        if self.transcript_json {
+            formats.push(TranscriptFormat::Json);
+        }
+        if self.transcript_srt {
+            formats.push(TranscriptFormat::Srt);
+        }
+        if self.transcript_md {
+            formats.push(TranscriptFormat::Markdown);
+        }
+        formats
+    }
+
+    /// 文字起こしフォーマットの一覧から選択状態を作る (CLI の --formats 用)
+    pub fn set_transcript_formats(&mut self, formats: &[TranscriptFormat]) {
+        self.transcript_txt = formats.contains(&TranscriptFormat::Txt);
+        self.transcript_json = formats.contains(&TranscriptFormat::Json);
+        self.transcript_srt = formats.contains(&TranscriptFormat::Srt);
+        self.transcript_md = formats.contains(&TranscriptFormat::Markdown);
+    }
+
+    pub fn any_selected(&self) -> bool {
+        self.edited_mp4
+            || self.podcast_mp3
+            || self.timeline_json
+            || !self.transcript_formats().is_empty()
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -24,6 +87,8 @@ pub struct AppConfig {
     pub target_lufs: f64,
     /// ffmpeg / ffprobe のあるディレクトリ (未指定なら PATH から探す)
     pub ffmpeg_dir: Option<PathBuf>,
+    /// 出力するファイルの選択
+    pub outputs: OutputSelection,
 }
 
 impl Default for AppConfig {
@@ -37,6 +102,7 @@ impl Default for AppConfig {
             transcribe: true,
             target_lufs: -16.0,
             ffmpeg_dir: None,
+            outputs: OutputSelection::default(),
         }
     }
 }

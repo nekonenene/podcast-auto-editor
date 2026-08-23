@@ -11,7 +11,6 @@ use tauri::State;
 use pae_core::config::AppConfig;
 use pae_core::media::ffmpeg::Ffmpeg;
 use pae_core::media::probe::probe;
-use pae_core::output::TranscriptFormat;
 use pae_core::pipeline::{run_job, JobSpec};
 use pae_core::progress::{CancelToken, ProgressReport, ProgressSink, Stage};
 use pae_core::transcribe::model::{ModelManager, MODELS};
@@ -55,7 +54,6 @@ pub struct JobRequest {
     pub fade_in_s: f32,
     pub fade_out_s: f32,
     pub ending_tail_s: f32,
-    pub voice_duck_db: f32,
     pub preset: String,
     pub transcribe: bool,
     pub model: String,
@@ -174,7 +172,6 @@ fn build_spec_and_save_defaults(request: &JobRequest) -> Result<JobSpec, String>
     config.bgm.fade_in_s = request.fade_in_s;
     config.bgm.fade_out_s = request.fade_out_s;
     config.bgm.ending_tail_s = request.ending_tail_s;
-    config.bgm.voice_duck_db = request.voice_duck_db;
     config.preset = request.preset.clone();
     config.model = request.model.clone();
     config.transcribe = request.transcribe;
@@ -194,25 +191,37 @@ fn build_spec_and_save_defaults(request: &JobRequest) -> Result<JobSpec, String>
         target_lufs: config.target_lufs,
         transcribe: request.transcribe,
         model: request.model.clone(),
-        formats: vec![
-            TranscriptFormat::Txt,
-            TranscriptFormat::Json,
-            TranscriptFormat::Srt,
-            TranscriptFormat::Markdown,
-        ],
+        outputs: config.outputs.clone(),
         ffmpeg_dir: config.ffmpeg_dir.clone(),
         timeline: None,
     })
 }
 
-/// BGM 音量プレビューのリクエスト
+/// 設定画面からの保存リクエスト。
+/// 出力ファイルの選択と EQ 分離は使用頻度が低いため、メイン画面ではなく
+/// 設定画面で変更してその場で保存する
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SettingsUpdate {
+    pub outputs: pae_core::config::OutputSelection,
+    pub voice_duck_db: f32,
+}
+
+#[tauri::command]
+pub fn save_settings(update: SettingsUpdate) -> Result<(), String> {
+    let mut config = AppConfig::load().map_err(|e| e.to_string())?;
+    config.outputs = update.outputs;
+    config.bgm.voice_duck_db = update.voice_duck_db;
+    config.save().map_err(|e| e.to_string())
+}
+
+/// BGM 音量プレビューのリクエスト。EQ 分離は設定に保存された値を使う
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BgmPreviewRequest {
     pub input: PathBuf,
     pub bgm: PathBuf,
     pub bgm_volume: f32,
-    pub voice_duck_db: f32,
 }
 
 /// 入力動画の一部と BGM を現在の設定でミックスした試聴用 MP3 を生成し、
@@ -232,7 +241,6 @@ pub async fn bgm_preview(request: BgmPreviewRequest) -> Result<tauri::ipc::Respo
 
         let opts = pae_core::media::process::BgmOpts {
             volume: request.bgm_volume,
-            voice_duck_db: request.voice_duck_db,
             ..config.bgm.clone()
         };
 

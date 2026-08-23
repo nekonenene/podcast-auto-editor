@@ -121,13 +121,14 @@ pub fn build_spec(
         spec.transcribe = false;
     }
     if let Some(formats) = &opts.formats {
-        spec.formats = formats
+        let formats = formats
             .split(',')
             .map(|s| {
                 TranscriptFormat::parse(s.trim())
                     .ok_or_else(|| anyhow::anyhow!("未知のフォーマットです: {s}"))
             })
             .collect::<anyhow::Result<Vec<_>>>()?;
+        spec.outputs.set_transcript_formats(&formats);
     }
     Ok(spec)
 }
