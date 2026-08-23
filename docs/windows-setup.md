@@ -114,6 +114,22 @@ cd crates/pae-app && npm run tauri -- dev --features cuda
 
 make コマンドは `winget install ezwinports.make` でインストールできます。
 
+### おまけ: CLI で使う場合
+
+デスクトップアプリを起動せず、コマンドラインだけで処理することもできます。
+文字起こしを GPU でおこなうには、ここでも `--features cuda` を付けます。
+
+```bash
+cargo run -p pae-cli --features cuda -- run input.mp4 -o output
+```
+
+無音検出とタイムライン生成だけを確認したい場合は `analyze` を使います。
+こちらは文字起こしをしないため、`--features cuda` を付ける意味はありません。
+
+```bash
+cargo run -p pae-cli -- analyze input.mp4
+```
+
 ## make が無い環境でのコマンド対応表
 
 Makefile のターゲットは以下の生コマンドに対応します。
