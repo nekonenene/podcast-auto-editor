@@ -83,6 +83,30 @@ h1 {
   overflow: hidden;
 }
 
+.waveform-minimap {
+  position: relative;
+  height: 10px;
+  margin-top: 4px;
+  border-radius: 5px;
+  background: rgba(120, 120, 128, 0.12);
+  cursor: pointer;
+  touch-action: none;
+}
+
+.waveform-minimap-view {
+  position: absolute;
+  top: 0;
+  height: 100%;
+  min-width: 8px;
+  border-radius: 5px;
+  background: rgba(10, 132, 255, 0.45);
+}
+
+.waveform-zoom {
+  display: flex;
+  gap: 4px;
+}
+
 .waveform-controls {
   display: flex;
   align-items: center;

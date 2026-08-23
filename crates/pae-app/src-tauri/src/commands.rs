@@ -140,9 +140,12 @@ pub async fn waveform(path: PathBuf) -> Result<WaveformData, String> {
         let (samples, _) =
             pae_core::media::extract::read_wav_samples(&wav).map_err(|e| e.to_string())?;
 
+        // ズーム表示に耐えるよう 50ms 刻みで計算する。
+        // 短いファイルでも概観が描けるよう下限を設け、極端に長いファイルは上限で頭打ちにする
+        let bucket_count = (info.duration_ms / 50).clamp(600, 200_000) as usize;
         Ok(WaveformData {
             duration_ms: info.duration_ms,
-            peaks: pae_core::media::waveform::compute_waveform(&samples, 1500),
+            peaks: pae_core::media::waveform::compute_waveform(&samples, bucket_count),
         })
     })
     .await
