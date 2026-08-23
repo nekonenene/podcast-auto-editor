@@ -20,8 +20,12 @@ jobs:
       - uses: actions/checkout@v4
 
       # 統合テストに ffmpeg / ffprobe が必要。
-      # このアクションは libx264 入りのビルドをキャッシュ付きで入れてくれる
-      - uses: FedericoCarboni/setup-ffmpeg@v3
+      # setup-ffmpeg は libx264 入りのビルドをキャッシュ付きで入れてくれるが
+      # x64 専用のため、arm64 の macOS ランナーでは Homebrew を使う
+      - if: runner.os == 'Windows'
+        uses: FedericoCarboni/setup-ffmpeg@v3
+      - if: runner.os == 'macOS'
+        run: brew install ffmpeg
 
       - uses: actions/setup-node@v4
         with:
