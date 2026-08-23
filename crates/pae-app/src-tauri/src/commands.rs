@@ -57,6 +57,9 @@ pub struct JobRequest {
     pub preset: String,
     pub transcribe: bool,
     pub model: String,
+    /// 出力範囲 (ミリ秒)。全体を出力するときは None
+    pub trim_start_ms: Option<u64>,
+    pub trim_end_ms: Option<u64>,
 }
 
 /// GUI へ返すジョブ結果
@@ -104,6 +107,56 @@ pub fn list_models() -> Result<Vec<ModelInfo>, String> {
             downloaded: manager.is_downloaded(spec),
         })
         .collect())
+}
+
+/// 波形表示用のデータ
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WaveformData {
+    pub duration_ms: u64,
+    /// 各区間のピーク (0.0〜1.0)
+    pub peaks: Vec<f32>,
+}
+
+/// 入力メディアの波形データを計算する
+#[tauri::command]
+pub async fn waveform(path: PathBuf) -> Result<WaveformData, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let config = AppConfig::load().map_err(|e| e.to_string())?;
+        let ffmpeg = Ffmpeg::locate(config.ffmpeg_dir.as_deref()).map_err(|e| e.to_string())?;
+        let info = probe(&ffmpeg, &path).map_err(|e| e.to_string())?;
+
+        let dir = tempfile::tempdir().map_err(|e| e.to_string())?;
+        let wav = dir.path().join("waveform.wav");
+        pae_core::media::extract::extract_analysis_wav(
+            &ffmpeg,
+            &path,
+            &wav,
+            info.duration_ms,
+            &mut |_| {},
+            &CancelToken::new(),
+        )
+        .map_err(|e| e.to_string())?;
+        let (samples, _) =
+            pae_core::media::extract::read_wav_samples(&wav).map_err(|e| e.to_string())?;
+
+        Ok(WaveformData {
+            duration_ms: info.duration_ms,
+            peaks: pae_core::media::waveform::compute_waveform(&samples, 1500),
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// 選択した入力ファイルを asset プロトコルで再生できるようにする。
+/// GUI の波形プレビューが <audio> で元ファイルを直接シーク再生するために使う
+#[tauri::command]
+pub fn allow_media_preview(app: tauri::AppHandle, path: PathBuf) -> Result<(), String> {
+    use tauri::Manager;
+    app.asset_protocol_scope()
+        .allow_file(&path)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -195,6 +248,10 @@ fn build_spec_and_save_defaults(request: &JobRequest) -> Result<JobSpec, String>
         mp3_bitrate_kbps: config.mp3_bitrate_kbps,
         ffmpeg_dir: config.ffmpeg_dir.clone(),
         timeline: None,
+        trim_range_ms: match (request.trim_start_ms, request.trim_end_ms) {
+            (None, None) => None,
+            (start, end) => Some((start.unwrap_or(0), end.unwrap_or(u64::MAX))),
+        },
     })
 }
 

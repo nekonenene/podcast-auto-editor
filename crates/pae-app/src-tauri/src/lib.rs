@@ -21,6 +21,8 @@ pub fn run() {
             commands::save_settings,
             commands::list_models,
             commands::probe_media,
+            commands::waveform,
+            commands::allow_media_preview,
             commands::start_job,
             commands::bgm_preview,
             commands::cancel_job,

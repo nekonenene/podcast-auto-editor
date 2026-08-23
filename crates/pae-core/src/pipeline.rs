@@ -41,6 +41,8 @@ pub struct JobSpec {
     pub ffmpeg_dir: Option<PathBuf>,
     /// analyze 済みタイムラインを渡すと VAD をスキップして再利用する
     pub timeline: Option<EditTimeline>,
+    /// 出力する範囲 (ミリ秒)。収録前後の無駄話をカットする。None なら全体
+    pub trim_range_ms: Option<(u64, u64)>,
 }
 
 impl JobSpec {
@@ -60,6 +62,7 @@ impl JobSpec {
             mp3_bitrate_kbps: config.mp3_bitrate_kbps,
             ffmpeg_dir: config.ffmpeg_dir.clone(),
             timeline: None,
+            trim_range_ms: None,
         }
     }
 }
@@ -177,7 +180,7 @@ pub fn run_job(spec: &JobSpec, sink: &dyn ProgressSink, cancel: &CancelToken) ->
     cancel.check()?;
 
     // タイムラインを用意する（既存があれば再利用、なければ VAD から生成）
-    let timeline = match &spec.timeline {
+    let mut timeline = match &spec.timeline {
         Some(t) => {
             validate_timeline(t)?;
             if t.source_duration_ms != info.duration_ms {
@@ -198,6 +201,13 @@ pub fn run_job(spec: &JobSpec, sink: &dyn ProgressSink, cancel: &CancelToken) ->
             cancel,
         )?,
     };
+
+    // 出力範囲が指定されていれば、範囲外を Remove にする
+    if let Some((start_ms, end_ms)) = spec.trim_range_ms {
+        let end_ms = end_ms.min(info.duration_ms);
+        crate::timeline::apply_trim_range(&mut timeline, start_ms, end_ms)?;
+        tracing::info!(start_ms, end_ms, "出力範囲を適用しました");
+    }
 
     tracing::info!(
         segments = timeline.segments.len(),

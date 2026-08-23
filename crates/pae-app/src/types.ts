@@ -101,6 +101,11 @@ export interface ProgressEvent {
   message: string | null;
 }
 
+export interface WaveformData {
+  durationMs: number;
+  peaks: number[];
+}
+
 export interface StageSeconds {
   stageLabel: string;
   seconds: number;

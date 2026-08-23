@@ -19,7 +19,7 @@ serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
 
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["protocol-asset"] }
 tempfile = "3"
 tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"

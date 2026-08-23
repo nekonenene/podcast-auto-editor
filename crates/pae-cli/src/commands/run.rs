@@ -43,6 +43,14 @@ pub struct CommonOpts {
     #[arg(long)]
     pub mp3_bitrate: Option<u32>,
 
+    /// 出力範囲の開始位置 (秒)。収録冒頭の無駄話をカットする
+    #[arg(long)]
+    pub trim_start: Option<f64>,
+
+    /// 出力範囲の終了位置 (秒)。収録末尾の無駄話をカットする
+    #[arg(long)]
+    pub trim_end: Option<f64>,
+
     /// ラウドネスターゲット (LUFS, 例: -16)
     #[arg(long)]
     pub lufs: Option<f64>,
@@ -117,6 +125,16 @@ pub fn build_spec(
     }
     if let Some(v) = opts.mp3_bitrate {
         spec.mp3_bitrate_kbps = v;
+    }
+    // トリム範囲。終了だけの指定は「そこまで」ではなく明示指定を要求するほうが
+    // 事故が少ないため、両方揃っていなくても片側は 0 / 入力末尾で補完する
+    if opts.trim_start.is_some() || opts.trim_end.is_some() {
+        let start_ms = (opts.trim_start.unwrap_or(0.0).max(0.0) * 1000.0) as u64;
+        let end_ms = opts
+            .trim_end
+            .map(|s| (s * 1000.0) as u64)
+            .unwrap_or(u64::MAX);
+        spec.trim_range_ms = Some((start_ms, end_ms));
     }
     if let Some(v) = opts.lufs {
         spec.target_lufs = v;

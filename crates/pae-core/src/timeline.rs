@@ -194,6 +194,67 @@ pub fn validate_timeline(timeline: &EditTimeline) -> Result<()> {
     Ok(())
 }
 
+/// 出力範囲 (トリム) をタイムラインに適用する。
+/// 収録の前後の無駄話をカットする用途で、範囲外のセグメントは Remove になり、
+/// 範囲の境界をまたぐセグメントは境界で分割される。全時間カバーの不変条件は保たれる
+pub fn apply_trim_range(
+    timeline: &mut EditTimeline,
+    keep_start_ms: u64,
+    keep_end_ms: u64,
+) -> Result<()> {
+    if keep_start_ms >= keep_end_ms || keep_end_ms > timeline.source_duration_ms {
+        return Err(PaeError::InvalidTimeline(format!(
+            "トリム範囲が不正です: {keep_start_ms}ms〜{keep_end_ms}ms"
+        )));
+    }
+
+    let mut segments: Vec<TimelineSegment> = Vec::with_capacity(timeline.segments.len() + 2);
+    for seg in &timeline.segments {
+        // トリム境界がセグメントの内側にあれば、そこで分割する
+        let mut points = vec![seg.source_start_ms];
+        for p in [keep_start_ms, keep_end_ms] {
+            if p > seg.source_start_ms && p < seg.source_end_ms {
+                points.push(p);
+            }
+        }
+        points.push(seg.source_end_ms);
+
+        for pair in points.windows(2) {
+            let (start, end) = (pair[0], pair[1]);
+            let len = end - start;
+            let inside = start >= keep_start_ms && end <= keep_end_ms;
+            let (action, keep) = if !inside {
+                (SegmentAction::Remove, 0)
+            } else {
+                match seg.action {
+                    SegmentAction::Keep => (SegmentAction::Keep, len),
+                    SegmentAction::Compress => {
+                        let keep = seg.keep_duration_ms.min(len);
+                        let action = if keep < len {
+                            SegmentAction::Compress
+                        } else {
+                            SegmentAction::Keep
+                        };
+                        (action, keep)
+                    }
+                    SegmentAction::Remove => (SegmentAction::Remove, 0),
+                }
+            };
+            segments.push(TimelineSegment {
+                source_start_ms: start,
+                source_end_ms: end,
+                kind: seg.kind,
+                action,
+                keep_duration_ms: keep,
+            });
+        }
+    }
+
+    timeline.segments = segments;
+    timeline.stats = compute_stats(&timeline.segments, timeline.source_duration_ms);
+    validate_timeline(timeline)
+}
+
 /// タイムラインから「出力に残すソース区間」のリストを導出する。
 /// Compress する無音は区間の先頭側を残す。直前の発話とつながって
 /// 「発話後の間」として自然に聞こえ、さらに隣接区間とマージできるため
@@ -391,6 +452,67 @@ mod tests {
         let sum: u64 = t.segments.iter().map(|s| s.keep_duration_ms).sum();
         assert_eq!(t.stats.output_duration_ms, sum);
         validate_timeline(&t).unwrap();
+    }
+
+    /// トリム範囲の適用: 範囲外は Remove、境界をまたぐセグメントは分割される
+    #[test]
+    fn trim_range_splits_and_removes() {
+        let p = Preset::natural();
+        // [speech 0-1000][silence 1000-5000 compress][speech 5000-6000]
+        let mut t = gen(&[seg(0, 1000), seg(5000, 6000)], 6000, &no_pad(), &p);
+        // 500ms〜5500ms だけを残す
+        apply_trim_range(&mut t, 500, 5500).unwrap();
+        validate_timeline(&t).unwrap();
+
+        // 先頭 speech は 0-500 (Remove) と 500-1000 (Keep) に分割される
+        assert_eq!(t.segments[0].source_end_ms, 500);
+        assert_eq!(t.segments[0].action, SegmentAction::Remove);
+        assert_eq!(t.segments[1].source_start_ms, 500);
+        assert_eq!(t.segments[1].action, SegmentAction::Keep);
+        assert_eq!(t.segments[1].keep_duration_ms, 500);
+
+        // 末尾 speech は 5000-5500 (Keep) と 5500-6000 (Remove) に分割される
+        let last = t.segments.last().unwrap();
+        assert_eq!(last.source_start_ms, 5500);
+        assert_eq!(last.action, SegmentAction::Remove);
+
+        // 中央の圧縮無音は範囲内なのでそのまま
+        let mid = t
+            .segments
+            .iter()
+            .find(|s| s.kind == SegmentKind::Silence && s.source_duration_ms() == 4000)
+            .unwrap();
+        assert_eq!(mid.action, SegmentAction::Compress);
+        assert_eq!(mid.keep_duration_ms, 1200);
+
+        // 出力尺 = 500 (前) + 1200 (無音圧縮後) + 500 (後)
+        assert_eq!(t.stats.output_duration_ms, 2200);
+    }
+
+    /// トリム境界が圧縮無音の中にあるとき、範囲内の残り部分に keep が引き継がれる
+    #[test]
+    fn trim_inside_compressed_silence() {
+        let p = Preset::natural(); // target 1200ms
+        let mut t = gen(&[seg(0, 1000), seg(5000, 6000)], 6000, &no_pad(), &p);
+        // 無音 (1000-5000) の途中 4500ms から残す
+        apply_trim_range(&mut t, 4500, 6000).unwrap();
+        // 4500-5000 の 500ms は keep 1200 とクランプされ全部残る (Keep 扱い)
+        let part = t
+            .segments
+            .iter()
+            .find(|s| s.source_start_ms == 4500 && s.source_end_ms == 5000)
+            .unwrap();
+        assert_eq!(part.action, SegmentAction::Keep);
+        assert_eq!(part.keep_duration_ms, 500);
+        assert_eq!(t.stats.output_duration_ms, 1500);
+    }
+
+    #[test]
+    fn trim_range_rejects_invalid() {
+        let p = Preset::natural();
+        let mut t = gen(&[seg(0, 1000)], 1000, &no_pad(), &p);
+        assert!(apply_trim_range(&mut t, 500, 500).is_err());
+        assert!(apply_trim_range(&mut t, 0, 2000).is_err());
     }
 
     #[test]

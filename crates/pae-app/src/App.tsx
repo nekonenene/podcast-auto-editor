@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Channel, invoke } from "@tauri-apps/api/core";
+import { Channel, convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open } from "@tauri-apps/plugin-dialog";
 import type {
@@ -10,7 +10,9 @@ import type {
   OutputSelection,
   ProgressEvent,
   Stage,
+  WaveformData,
 } from "./types";
+import { Waveform } from "./Waveform";
 import {
   DEFAULT_OUTPUTS,
   MEDIA_OUTPUT_KEYS,
@@ -50,6 +52,10 @@ function extensionOf(path: string): string {
 function App() {
   const [video, setVideo] = useState<string | null>(null);
   const [videoInfo, setVideoInfo] = useState<MediaInfo | null>(null);
+  const [waveform, setWaveform] = useState<WaveformData | null>(null);
+  const [previewSrc, setPreviewSrc] = useState<string | null>(null);
+  const [trimStartMs, setTrimStartMs] = useState(0);
+  const [trimEndMs, setTrimEndMs] = useState(0);
   const [bgm, setBgm] = useState<string | null>(null);
   const [preset, setPreset] = useState("natural");
   const [bgmVolume, setBgmVolume] = useState(0.15);
@@ -104,10 +110,24 @@ function App() {
     setPhase("idle");
     setVideo(path);
     setVideoInfo(null);
+    setWaveform(null);
+    setPreviewSrc(null);
     // 出力先が未設定なら、動画と同じ場所の podcast-output をデフォルトにする
     setOutputDir((current) => current ?? `${parentDir(path)}/podcast-output`);
     try {
-      setVideoInfo(await invoke<MediaInfo>("probe_media", { path }));
+      const info = await invoke<MediaInfo>("probe_media", { path });
+      setVideoInfo(info);
+      setTrimStartMs(0);
+      setTrimEndMs(info.duration_ms);
+
+      // 波形とプレビュー再生の準備。失敗しても編集自体はできるので警告に留める
+      try {
+        await invoke("allow_media_preview", { path });
+        setPreviewSrc(convertFileSrc(path));
+        setWaveform(await invoke<WaveformData>("waveform", { path }));
+      } catch (e) {
+        console.warn("波形の準備に失敗:", e);
+      }
     } catch (e) {
       setError(String(e));
       setVideo(null);
@@ -255,6 +275,10 @@ function App() {
           preset,
           transcribe,
           model,
+          // 全範囲のときは指定なし (トリムなし) として送る
+          trimStartMs: trimStartMs > 0 ? trimStartMs : null,
+          trimEndMs:
+            videoInfo && trimEndMs < videoInfo.duration_ms ? trimEndMs : null,
         },
         onProgress,
       });
@@ -417,6 +441,23 @@ function App() {
               {formatDuration(videoInfo.duration_ms)} ・ 音声のみ (
               {videoInfo.audio_codec}) ・ MP4 の代わりに MP3 が出力されます
             </p>
+          )}
+          {waveform && previewSrc && videoInfo && (
+            <Waveform
+              src={previewSrc}
+              peaks={waveform.peaks}
+              durationMs={videoInfo.duration_ms}
+              trimStartMs={trimStartMs}
+              trimEndMs={trimEndMs}
+              onTrimChange={(start, end) => {
+                setTrimStartMs(start);
+                setTrimEndMs(end);
+              }}
+              disabled={running}
+            />
+          )}
+          {video && videoInfo && !waveform && (
+            <p className="hint">波形を解析中...</p>
           )}
         </div>
 
