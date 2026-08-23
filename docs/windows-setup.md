@@ -3,6 +3,20 @@
 Windows 上で開発モード（`cargo` / `npm`）でアプリを動かすための手順です。
 インストーラーでの配布はまだ対応していません。
 
+## コマンドはどこで実行するか
+
+このドキュメントのコマンドは、特に断りがない限りすべて
+**PowerShell**（Windows Terminal で開くものでよい）から実行してください。
+winget も cargo も npm も PowerShell からそのまま使えます。
+
+**WSL は使わないでください。**
+このアプリは Windows ネイティブのデスクトップアプリのため、
+WSL 内でビルドすると Linux 向けバイナリになってしまい、
+GUI の表示に使う WebView2 や、動画エンコードに使う Media Foundation が利用できません。
+
+bash スクリプト（`scripts/make-fixtures.sh`）や `make` を使いたい場合だけ、
+Git for Windows 付属の **Git Bash** を使います。詳しくは後述の対応表を参照してください。
+
 ## 必要なもの
 
 | ツール | 入手方法 | 補足 |
@@ -52,6 +66,11 @@ CLI の場合は `cargo run -p pae-cli --features cuda -- run input.mp4 -o outpu
 
 Makefile のターゲットは以下の生コマンドに対応します。
 Git for Windows 付属の Git Bash を使う場合は `make` を入れれば Makefile もそのまま動きます。
+
+PowerShell で実行する場合の注意:
+Windows 標準の PowerShell 5.1 は `&&` でのコマンド連結に対応していません。
+`cd crates/pae-app` と `npm install` を分けて実行するか、
+`&&` が使える PowerShell 7 (`winget install Microsoft.PowerShell`) の利用をおすすめします。
 
 | make ターゲット | 対応するコマンド |
 | --- | --- |
