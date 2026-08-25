@@ -20,6 +20,17 @@ pub enum PaeError {
     #[error("メディア情報の解析に失敗しました: {0}")]
     ProbeParse(String),
 
+    #[error(
+        "{stage} の出力が壊れています。{stream}の長さが {actual_ms}ms で、期待する {expected_ms}ms と食い違います。\
+         ffmpeg が警告を出さずに取りこぼした可能性があります"
+    )]
+    OutputTruncated {
+        stage: String,
+        stream: String,
+        actual_ms: u64,
+        expected_ms: u64,
+    },
+
     #[error("VAD の実行に失敗しました: {0}")]
     Vad(String),
 

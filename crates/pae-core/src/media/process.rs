@@ -9,23 +9,11 @@ use crate::error::{PaeError, Result};
 use crate::progress::CancelToken;
 
 use super::ffmpeg::Ffmpeg;
+use super::probe::probe_stream_durations;
 
-/// keep_ranges (ミリ秒) から select/aselect 用のフィルタスクリプトを生成する。
-///
-/// カット後に setpts / asetpts でタイムスタンプをゼロから振り直すこと、
-/// aresample=async=1 で微小なギャップを吸収することが音ズレ防止の要点。
-///
-/// `tail_ms` を指定すると末尾に「余韻」を足す。映像は最終フレームの静止
-/// (tpad clone)、音声は無音のパディングで、あとから BGM だけが数秒残って
-/// フェードアウトする Podcast らしいエンディングを作るために使う。
-///
-/// `has_video` が false のとき (mp3 や wav などの音声入力) は音声チェーンだけを作る
-pub fn build_cut_filter_script(
-    keep_ranges_ms: &[(u64, u64)],
-    tail_ms: u64,
-    has_video: bool,
-) -> String {
-    let expr: Vec<String> = keep_ranges_ms
+/// keep_ranges (ミリ秒) から select / aselect の判定式を作る
+fn build_select_expr(keep_ranges_ms: &[(u64, u64)]) -> String {
+    keep_ranges_ms
         .iter()
         .map(|(start, end)| {
             format!(
@@ -34,24 +22,41 @@ pub fn build_cut_filter_script(
                 *end as f64 / 1000.0
             )
         })
-        .collect();
-    let expr = expr.join("+");
-    let (video_tail, audio_tail) = if tail_ms > 0 {
-        let tail_s = tail_ms as f64 / 1000.0;
-        (
-            format!(",tpad=stop_duration={tail_s:.3}:stop_mode=clone"),
-            format!(",apad=pad_dur={tail_s:.3}"),
+        .collect::<Vec<_>>()
+        .join("+")
+}
+
+/// 映像チェーンのフィルタスクリプトを生成する。
+///
+/// カット後に setpts でタイムスタンプをゼロから振り直すのが音ズレ防止の要点。
+/// `tail_ms` を指定すると末尾に最終フレームの静止を足す。
+/// 会話が終わったあと BGM だけが数秒残るエンディングを作るために使う
+pub fn build_cut_video_filter(keep_ranges_ms: &[(u64, u64)], tail_ms: u64) -> String {
+    let expr = build_select_expr(keep_ranges_ms);
+    let tail = if tail_ms > 0 {
+        format!(
+            ",tpad=stop_duration={:.3}:stop_mode=clone",
+            tail_ms as f64 / 1000.0
         )
     } else {
-        (String::new(), String::new())
+        String::new()
     };
-    let audio_chain =
-        format!("[0:a]aselect='{expr}',asetpts=N/SR/TB,aresample=async=1{audio_tail}[a]\n");
-    if has_video {
-        format!("[0:v]select='{expr}',setpts=N/FRAME_RATE/TB{video_tail}[v];\n{audio_chain}")
+    format!("[0:v]select='{expr}',setpts=N/FRAME_RATE/TB{tail}[v]\n")
+}
+
+/// 音声チェーンのフィルタスクリプトを生成する。
+///
+/// asetpts でタイムスタンプをゼロから振り直し、
+/// aresample=async=1 で微小なギャップを吸収する。
+/// `tail_ms` を指定すると末尾に無音のパディングを足す
+pub fn build_cut_audio_filter(keep_ranges_ms: &[(u64, u64)], tail_ms: u64) -> String {
+    let expr = build_select_expr(keep_ranges_ms);
+    let tail = if tail_ms > 0 {
+        format!(",apad=pad_dur={:.3}", tail_ms as f64 / 1000.0)
     } else {
-        audio_chain
-    }
+        String::new()
+    };
+    format!("[0:a]aselect='{expr}',asetpts=N/SR/TB,aresample=async=1{tail}[a]\n")
 }
 
 /// 出力動画のエンコード設定
@@ -86,8 +91,48 @@ impl VideoEncodeOpts {
     }
 }
 
+/// フィルタスクリプトをファイルへ渡して ffmpeg を1回実行する。
+///
+/// "-/opt file" は値をファイルから読む ffmpeg の構文。
+/// フィルタ式は長尺動画で数百節になり引数の長さ制限を超えうるためファイル渡しにする
+/// (旧 -filter_complex_script は ffmpeg 9 で廃止)
+#[allow(clippy::too_many_arguments)]
+fn run_with_filter_script(
+    ffmpeg: &Ffmpeg,
+    input: &Path,
+    script: &str,
+    output_args: &[String],
+    output: &Path,
+    expected_output_ms: Option<u64>,
+    on_progress: &mut dyn FnMut(f32),
+    cancel: &CancelToken,
+) -> Result<String> {
+    let script_file = tempfile::Builder::new()
+        .prefix("pae-filter-")
+        .suffix(".txt")
+        .tempfile()?;
+    std::fs::write(script_file.path(), script)?;
+
+    let mut args: Vec<String> = vec![
+        "-i".into(),
+        input.display().to_string(),
+        "-/filter_complex".into(),
+        script_file.path().display().to_string(),
+    ];
+    args.extend_from_slice(output_args);
+    args.push(output.display().to_string());
+    ffmpeg.run(&args, expected_output_ms, on_progress, cancel)
+}
+
 /// タイムラインの keep_ranges に従って入力をカット・再結合する。
-/// 全再エンコードだが、デコードは1回で済み A/V 同期が最も安定する方式。
+///
+/// 映像ありの入力では、映像と音声を**別々の ffmpeg プロセス**で処理してから多重化する。
+/// ひとつの filter_complex に映像出力と音声出力を同居させると、
+/// ffmpeg 9 は長尺の入力で音声ブランチを途中で打ち切ることがあるため
+/// (警告も出さず終了コードも 0 になる。詳細は docs/tech-notes.md)。
+/// 2つのプロセスは同時に走らせる。映像のエンコードが律速なので、
+/// 音声の処理時間はその裏に隠れて全体はむしろ速くなる。
+///
 /// 音声のみの入力では音声チェーンだけを処理する (出力は .flac を想定)
 #[allow(clippy::too_many_arguments)]
 pub fn cut_media(
@@ -108,54 +153,179 @@ pub fn cut_media(
         ));
     }
 
-    let script = build_cut_filter_script(keep_ranges_ms, tail_ms, has_video);
-    let script_file = tempfile::Builder::new()
-        .prefix("pae-filter-")
-        .suffix(".txt")
-        .tempfile()?;
-    std::fs::write(script_file.path(), &script)?;
-
-    let mut args: Vec<String> = vec![
-        "-i".into(),
-        input.display().to_string(),
-        // "-/opt file" は値をファイルから読む ffmpeg の構文。
-        // フィルタ式は長尺動画で数百節になり引数の長さ制限を超えうるためファイル渡しにする
-        // (旧 -filter_complex_script は ffmpeg 9 で廃止)
-        "-/filter_complex".into(),
-        script_file.path().display().to_string(),
-    ];
-    if has_video {
-        args.extend(
-            [
-                "-map",
-                "[v]",
-                "-map",
-                "[a]",
-                "-c:v",
-                &encode.encoder,
-                "-b:v",
-                &encode.bitrate,
-                "-pix_fmt",
-                "yuv420p",
-                "-fps_mode",
-                "cfr",
-                "-c:a",
-                "aac",
-                "-b:a",
-                "192k",
-                "-ar",
-                "48000",
-                "-movflags",
-                "+faststart",
-            ]
-            .map(String::from),
-        );
+    let log = if has_video {
+        cut_video_and_audio(
+            ffmpeg,
+            input,
+            keep_ranges_ms,
+            output,
+            output_duration_ms,
+            tail_ms,
+            encode,
+            on_progress,
+            cancel,
+        )?
     } else {
         // 音声のみ: 中間ファイルは可逆の FLAC にして多段エンコードの劣化を避ける
-        args.extend(["-map", "[a]", "-c:a", "flac", "-ar", "48000"].map(String::from));
+        run_with_filter_script(
+            ffmpeg,
+            input,
+            &build_cut_audio_filter(keep_ranges_ms, tail_ms),
+            &["-map", "[a]", "-c:a", "flac", "-ar", "48000"].map(String::from),
+            output,
+            Some(output_duration_ms),
+            on_progress,
+            cancel,
+        )?
+    };
+
+    verify_output_duration(ffmpeg, output, output_duration_ms, "カット")?;
+    Ok(log)
+}
+
+/// 映像パスと音声パスを並行して走らせ、最後に多重化する
+#[allow(clippy::too_many_arguments)]
+fn cut_video_and_audio(
+    ffmpeg: &Ffmpeg,
+    input: &Path,
+    keep_ranges_ms: &[(u64, u64)],
+    output: &Path,
+    output_duration_ms: u64,
+    tail_ms: u64,
+    encode: &VideoEncodeOpts,
+    on_progress: &mut dyn FnMut(f32),
+    cancel: &CancelToken,
+) -> Result<String> {
+    let parts_dir = tempfile::Builder::new().prefix("pae-cut-").tempdir()?;
+    let video_part = parts_dir.path().join("video.mp4");
+    let audio_part = parts_dir.path().join("audio.m4a");
+
+    // 音声側は独立したキャンセル用トークンで動かす。
+    // 映像側が失敗したときに、無駄になった音声処理をすぐ止めるため
+    let audio_cancel = CancelToken::new();
+    let audio_thread = {
+        let ffmpeg = ffmpeg.clone();
+        let cancel = audio_cancel.clone();
+        let input = input.to_path_buf();
+        let output = audio_part.clone();
+        let script = build_cut_audio_filter(keep_ranges_ms, tail_ms);
+        std::thread::spawn(move || {
+            run_with_filter_script(
+                &ffmpeg,
+                &input,
+                &script,
+                &["-map", "[a]", "-c:a", "aac", "-b:a", "192k", "-ar", "48000"].map(String::from),
+                &output,
+                None,
+                &mut |_| {},
+                &cancel,
+            )
+        })
+    };
+
+    // 進捗は映像パスのものを使う。律速なので体感と最も合う
+    let video_result = run_with_filter_script(
+        ffmpeg,
+        input,
+        &build_cut_video_filter(keep_ranges_ms, tail_ms),
+        &[
+            "-map",
+            "[v]",
+            "-c:v",
+            &encode.encoder,
+            "-b:v",
+            &encode.bitrate,
+            "-pix_fmt",
+            "yuv420p",
+            "-fps_mode",
+            "cfr",
+            "-an",
+            // 中間ファイルなので faststart は付けない。
+            // moov を先頭へ移すためだけに数GBを書き直すことになり、多重化でどうせ付け直す
+        ]
+        .map(String::from),
+        &video_part,
+        Some(output_duration_ms),
+        &mut |fraction| on_progress(fraction * 0.95),
+        cancel,
+    );
+    if video_result.is_err() {
+        audio_cancel.cancel();
     }
-    args.push(output.display().to_string());
-    ffmpeg.run(&args, Some(output_duration_ms), on_progress, cancel)
+
+    // 映像側が失敗しても必ずスレッドを回収する。
+    // 先に ? で戻ると音声の子プロセスが取り残される
+    let audio_result = audio_thread.join().unwrap_or_else(|_| {
+        Err(PaeError::ExternalProcess {
+            tool: "ffmpeg (音声パス)".into(),
+            code: None,
+            stderr: "音声パスを実行するスレッドが異常終了しました".into(),
+        })
+    });
+    let video_log = video_result?;
+    let audio_log = audio_result?;
+
+    // 多重化は再エンコードなしなので数秒で終わる
+    let mux_args: Vec<String> = vec![
+        "-i".into(),
+        video_part.display().to_string(),
+        "-i".into(),
+        audio_part.display().to_string(),
+        "-map".into(),
+        "0:v".into(),
+        "-map".into(),
+        "1:a".into(),
+        "-c".into(),
+        "copy".into(),
+        "-movflags".into(),
+        "+faststart".into(),
+        output.display().to_string(),
+    ];
+    let mux_log = ffmpeg.run(
+        &mux_args,
+        Some(output_duration_ms),
+        &mut |fraction| on_progress(0.95 + fraction * 0.05),
+        cancel,
+    )?;
+
+    Ok(format!("{video_log}{audio_log}{mux_log}"))
+}
+
+/// 出力長が期待どおりかを判定する。
+///
+/// 許容誤差を出力長の 2% (最低2秒) と広めに取っているのは、
+/// select がフレーム単位、aselect が音声フレーム単位で切るため、
+/// keep_ranges の数だけ丸め誤差が積み上がるのを許すため。
+/// 捉えたいのは数十%規模の欠落なので、この広さでも用は足りる
+fn duration_within_tolerance(actual_ms: u64, expected_ms: u64) -> bool {
+    let tolerance_ms = (expected_ms / 50).max(2_000);
+    actual_ms.abs_diff(expected_ms) <= tolerance_ms
+}
+
+/// 生成したファイルが期待どおりの長さかを確かめる。
+///
+/// ffmpeg は長尺の入力で音声を途中までしか書かないことがあり、
+/// そのとき警告を出さず終了コードも 0 のままになる。
+/// 外部プロセスの成否だけでは検知できないので、ここで長さを突き合わせる
+fn verify_output_duration(
+    ffmpeg: &Ffmpeg,
+    output: &Path,
+    expected_ms: u64,
+    stage: &str,
+) -> Result<()> {
+    let durations = probe_stream_durations(ffmpeg, output)?;
+    for (stream, actual_ms) in [("映像", durations.video_ms), ("音声", durations.audio_ms)] {
+        let Some(actual_ms) = actual_ms else { continue };
+        if !duration_within_tolerance(actual_ms, expected_ms) {
+            return Err(PaeError::OutputTruncated {
+                stage: stage.into(),
+                stream: stream.into(),
+                actual_ms,
+                expected_ms,
+            });
+        }
+    }
+    Ok(())
 }
 
 /// BGM のミックス設定
@@ -335,7 +505,9 @@ pub fn mix_bgm(
         args.extend(["-map", "[a]", "-c:a", "flac", "-ar", "48000"].map(String::from));
     }
     args.push(output.display().to_string());
-    ffmpeg.run(&args, Some(main_duration_ms), on_progress, cancel)
+    let log = ffmpeg.run(&args, Some(main_duration_ms), on_progress, cancel)?;
+    verify_output_duration(ffmpeg, output, main_duration_ms, "BGM ミックス")?;
+    Ok(log)
 }
 
 /// loudnorm 1パス目の測定結果
@@ -461,7 +633,9 @@ pub fn apply_loudnorm(
         args.extend(["-map", "0:a", "-c:a", "flac", "-ar", "48000"].map(String::from));
     }
     args.push(output.display().to_string());
-    ffmpeg.run(&args, Some(duration_ms), on_progress, cancel)
+    let log = ffmpeg.run(&args, Some(duration_ms), on_progress, cancel)?;
+    verify_output_duration(ffmpeg, output, duration_ms, "ラウドネス調整")?;
+    Ok(log)
 }
 
 /// 完成した動画・音声から Podcast 用 MP3 を書き出す。
@@ -489,7 +663,9 @@ pub fn encode_mp3(
     ];
     args.extend(quality_args);
     args.push(output.display().to_string());
-    ffmpeg.run(&args, Some(duration_ms), on_progress, cancel)
+    let log = ffmpeg.run(&args, Some(duration_ms), on_progress, cancel)?;
+    verify_output_duration(ffmpeg, output, duration_ms, "MP3 書き出し")?;
+    Ok(log)
 }
 
 #[cfg(test)]
@@ -497,29 +673,51 @@ mod tests {
     use super::*;
 
     #[test]
-    fn cut_filter_script_snapshot() {
-        let script = build_cut_filter_script(&[(0, 2200), (5000, 6000)], 0, true);
+    fn cut_video_filter_snapshot() {
+        let script = build_cut_video_filter(&[(0, 2200), (5000, 6000)], 0);
         insta::assert_snapshot!(script, @r"
-        [0:v]select='between(t,0.000,2.200)+between(t,5.000,6.000)',setpts=N/FRAME_RATE/TB[v];
+        [0:v]select='between(t,0.000,2.200)+between(t,5.000,6.000)',setpts=N/FRAME_RATE/TB[v]
+        ");
+    }
+
+    #[test]
+    fn cut_audio_filter_snapshot() {
+        let script = build_cut_audio_filter(&[(0, 2200), (5000, 6000)], 0);
+        insta::assert_snapshot!(script, @r"
         [0:a]aselect='between(t,0.000,2.200)+between(t,5.000,6.000)',asetpts=N/SR/TB,aresample=async=1[a]
         ");
     }
 
     #[test]
-    fn cut_filter_script_with_ending_tail() {
-        let script = build_cut_filter_script(&[(0, 2200)], 5000, true);
+    fn cut_video_filter_with_ending_tail() {
+        let script = build_cut_video_filter(&[(0, 2200)], 5000);
         insta::assert_snapshot!(script, @r"
-        [0:v]select='between(t,0.000,2.200)',setpts=N/FRAME_RATE/TB,tpad=stop_duration=5.000:stop_mode=clone[v];
-        [0:a]aselect='between(t,0.000,2.200)',asetpts=N/SR/TB,aresample=async=1,apad=pad_dur=5.000[a]
+        [0:v]select='between(t,0.000,2.200)',setpts=N/FRAME_RATE/TB,tpad=stop_duration=5.000:stop_mode=clone[v]
         ");
     }
 
     #[test]
-    fn cut_filter_script_audio_only() {
-        let script = build_cut_filter_script(&[(0, 2200), (5000, 6000)], 3000, false);
+    fn cut_audio_filter_with_ending_tail() {
+        let script = build_cut_audio_filter(&[(0, 2200)], 3000);
         insta::assert_snapshot!(script, @r"
-        [0:a]aselect='between(t,0.000,2.200)+between(t,5.000,6.000)',asetpts=N/SR/TB,aresample=async=1,apad=pad_dur=3.000[a]
+        [0:a]aselect='between(t,0.000,2.200)',asetpts=N/SR/TB,aresample=async=1,apad=pad_dur=3.000[a]
         ");
+    }
+
+    /// 72分の出力での判定。フレーム境界の丸めは許し、実際に遭遇した欠落は捉えること
+    #[test]
+    fn tolerates_frame_rounding_but_catches_truncation() {
+        assert!(duration_within_tolerance(4_332_747, 4_332_732));
+        assert!(duration_within_tolerance(4_347_000, 4_332_732));
+        // 音声が約 1/3 になった実例
+        assert!(!duration_within_tolerance(1_449_400, 4_332_732));
+    }
+
+    /// 短い出力では 2% が小さくなりすぎるため、最低2秒を下限にしている
+    #[test]
+    fn short_output_uses_minimum_tolerance() {
+        assert!(duration_within_tolerance(9_900, 8_000));
+        assert!(!duration_within_tolerance(11_000, 8_000));
     }
 
     #[test]

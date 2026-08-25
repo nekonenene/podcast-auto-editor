@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use pae_core::media::extract::{extract_analysis_wav, read_wav_samples};
 use pae_core::media::ffmpeg::Ffmpeg;
-use pae_core::media::probe::probe;
+use pae_core::media::probe::{probe, probe_stream_durations};
 use pae_core::media::process::{
     apply_loudnorm, cut_media, measure_loudness, mix_bgm, BgmOpts, LoudnormTarget, VideoEncodeOpts,
 };
@@ -178,6 +178,20 @@ fn cut_preserves_av_sync_and_tone_positions() {
         (info.duration_ms as i64 - 8000).abs() < 100,
         "出力の長さが期待とずれています: {}ms",
         info.duration_ms
+    );
+
+    // 映像と音声の長さが揃っていること。
+    // ffmpeg が音声だけを途中で打ち切る壊れ方を捉える (docs/tech-notes.md 参照)
+    let durations = probe_stream_durations(&ffmpeg, &output).unwrap();
+    let video_ms = durations
+        .video_ms
+        .expect("映像ストリームの長さが取れません");
+    let audio_ms = durations
+        .audio_ms
+        .expect("音声ストリームの長さが取れません");
+    assert!(
+        (video_ms as i64 - audio_ms as i64).abs() < 200,
+        "映像 {video_ms}ms と音声 {audio_ms}ms で長さが揃っていません"
     );
 
     // カット後のトーン配置: 0-2s ON, 2-3s OFF, 3-5s ON(880Hz), 5-6s OFF, 6-8s ON
