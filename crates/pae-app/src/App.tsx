@@ -557,9 +557,9 @@ function App() {
             onChange={(e) => setPreset(e.target.value)}
             disabled={running}
           >
-            <option value="natural">Natural — 自然な間を多めに残す</option>
-            <option value="standard">Standard — 通常の Podcast 編集</option>
-            <option value="aggressive">Aggressive — テンポ重視</option>
+            <option value="natural">Natural — 1.5秒以上の間を0.9秒に</option>
+            <option value="standard">Standard — 1.0秒以上の間を0.6秒に</option>
+            <option value="aggressive">Aggressive — 0.7秒以上の間を0.4秒に</option>
           </select>
         </div>
 

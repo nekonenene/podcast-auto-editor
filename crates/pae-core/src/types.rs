@@ -105,13 +105,18 @@ impl Default for VadParams {
 }
 
 /// 無音短縮プリセット。「無音を削除する」のではなく
-/// 「長すぎる無音を自然な長さまで短縮する」ためのパラメータ
+/// 「長すぎる無音を自然な長さまで短縮する」ためのパラメータ。
+///
+/// 2つの長さは、どちらも耳に聞こえる「間」の長さを指す。
+/// 対談の収録では間の長さは中央値で 0.5〜0.8 秒、9割が 1.5 秒未満に収まるため、
+/// しきい値を秒単位まで上げると短縮がまったく働かなくなる
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Preset {
     pub name: String,
-    /// この長さ以上の無音を短縮対象にする
+    /// この長さ以上の間を短縮対象にする
     pub compress_threshold_ms: u64,
-    /// 短縮後に残す無音の長さ
+    /// 短縮後に残す間の長さ。
+    /// 発話の前後のパディングだけで下限が決まるため、それより短くはできない
     pub target_silence_ms: u64,
     /// 動画の冒頭・末尾の無音は会話の間ではないため、
     /// しきい値未満でも target_silence_ms まで短縮する
@@ -122,8 +127,8 @@ impl Preset {
     pub fn natural() -> Self {
         Self {
             name: "natural".into(),
-            compress_threshold_ms: 3000,
-            target_silence_ms: 1200,
+            compress_threshold_ms: 1500,
+            target_silence_ms: 900,
             trim_edges: true,
         }
     }
@@ -131,8 +136,8 @@ impl Preset {
     pub fn standard() -> Self {
         Self {
             name: "standard".into(),
-            compress_threshold_ms: 1500,
-            target_silence_ms: 800,
+            compress_threshold_ms: 1000,
+            target_silence_ms: 600,
             trim_edges: true,
         }
     }
@@ -141,7 +146,7 @@ impl Preset {
         Self {
             name: "aggressive".into(),
             compress_threshold_ms: 700,
-            target_silence_ms: 300,
+            target_silence_ms: 400,
             trim_edges: true,
         }
     }

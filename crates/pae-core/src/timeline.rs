@@ -19,7 +19,7 @@ pub fn generate_timeline(
 ) -> Result<EditTimeline> {
     let padded = apply_padding(speech, vad_params, source_duration_ms);
     let merged = merge_segments(padded);
-    let segments = build_segments(&merged, source_duration_ms, preset);
+    let segments = build_segments(&merged, source_duration_ms, vad_params, preset);
     let stats = compute_stats(&segments, source_duration_ms);
 
     let timeline = EditTimeline {
@@ -71,6 +71,7 @@ fn merge_segments(mut segments: Vec<SpeechSegment>) -> Vec<SpeechSegment> {
 fn build_segments(
     speech: &[SpeechSegment],
     duration_ms: u64,
+    params: &VadParams,
     preset: &Preset,
 ) -> Vec<TimelineSegment> {
     let mut silences: Vec<(u64, u64)> = Vec::new();
@@ -102,7 +103,21 @@ fn build_segments(
         if take_silence {
             let (start, end) = silence_iter.next().unwrap();
             let is_edge = start == 0 || Some(start) == last_silence_start && end == duration_ms;
-            segments.push(decide_silence(start, end, preset, is_edge));
+            // この無音は、前後の発話へ付けたパディングにすでに削られている。
+            // 手前に発話があれば pad_after の分、後ろに発話があれば pad_before の分だけ短い
+            let head_pad = if start > 0 { params.pad_after_ms } else { 0 };
+            let tail_pad = if end < duration_ms {
+                params.pad_before_ms
+            } else {
+                0
+            };
+            segments.push(decide_silence(
+                start,
+                end,
+                head_pad + tail_pad,
+                preset,
+                is_edge,
+            ));
         } else {
             let sp = speech_iter.next().unwrap();
             segments.push(TimelineSegment {
@@ -119,12 +134,24 @@ fn build_segments(
 
 /// 無音ひとつ分の短縮判断。
 /// 「削除」はせず、しきい値以上の無音を自然な長さ (target_silence_ms) まで縮める。
-/// 冒頭・末尾の無音は会話の間ではないため、trim_edges 時はしきい値未満でも縮める
-fn decide_silence(start: u64, end: u64, preset: &Preset, is_edge: bool) -> TimelineSegment {
+/// 冒頭・末尾の無音は会話の間ではないため、trim_edges 時はしきい値未満でも縮める。
+///
+/// preset のしきい値と目標値は、耳に聞こえる「間」の長さとして扱う。
+/// セグメントとしての無音は前後の発話パディングにその分を譲り渡したあとの長さなので、
+/// pads を足し戻してから判定し、残す長さは逆に pads を引いてから決める
+fn decide_silence(
+    start: u64,
+    end: u64,
+    pads: u64,
+    preset: &Preset,
+    is_edge: bool,
+) -> TimelineSegment {
     let len = end - start;
-    let should_compress = len >= preset.compress_threshold_ms || (is_edge && preset.trim_edges);
+    let pause_ms = len + pads;
+    let should_compress =
+        pause_ms >= preset.compress_threshold_ms || (is_edge && preset.trim_edges);
     let keep = if should_compress {
-        preset.target_silence_ms.min(len)
+        preset.target_silence_ms.saturating_sub(pads).min(len)
     } else {
         len
     };
@@ -320,32 +347,54 @@ mod tests {
 
     #[test]
     fn aggressive_boundary_690_700_710() {
-        let p = Preset::aggressive(); // threshold 700ms → 300ms
+        let p = Preset::aggressive(); // threshold 700ms → 400ms
         assert_eq!(middle_silence(690, &p).action, SegmentAction::Keep);
         let s700 = middle_silence(700, &p);
         assert_eq!(s700.action, SegmentAction::Compress);
-        assert_eq!(s700.keep_duration_ms, 300);
+        assert_eq!(s700.keep_duration_ms, 400);
         assert_eq!(middle_silence(710, &p).action, SegmentAction::Compress);
     }
 
     #[test]
-    fn standard_boundary_1490_1500_1510() {
-        let p = Preset::standard(); // threshold 1500ms → 800ms
-        assert_eq!(middle_silence(1490, &p).action, SegmentAction::Keep);
-        let s1500 = middle_silence(1500, &p);
-        assert_eq!(s1500.action, SegmentAction::Compress);
-        assert_eq!(s1500.keep_duration_ms, 800);
-        assert_eq!(middle_silence(1510, &p).action, SegmentAction::Compress);
+    fn standard_boundary_990_1000_1010() {
+        let p = Preset::standard(); // threshold 1000ms → 600ms
+        assert_eq!(middle_silence(990, &p).action, SegmentAction::Keep);
+        let s1000 = middle_silence(1000, &p);
+        assert_eq!(s1000.action, SegmentAction::Compress);
+        assert_eq!(s1000.keep_duration_ms, 600);
+        assert_eq!(middle_silence(1010, &p).action, SegmentAction::Compress);
     }
 
     #[test]
-    fn natural_boundary_2990_3000_3010() {
-        let p = Preset::natural(); // threshold 3000ms → 1200ms
-        assert_eq!(middle_silence(2990, &p).action, SegmentAction::Keep);
-        let s3000 = middle_silence(3000, &p);
-        assert_eq!(s3000.action, SegmentAction::Compress);
-        assert_eq!(s3000.keep_duration_ms, 1200);
-        assert_eq!(middle_silence(3010, &p).action, SegmentAction::Compress);
+    fn natural_boundary_1490_1500_1510() {
+        let p = Preset::natural(); // threshold 1500ms → 900ms
+        assert_eq!(middle_silence(1490, &p).action, SegmentAction::Keep);
+        let s1500 = middle_silence(1500, &p);
+        assert_eq!(s1500.action, SegmentAction::Compress);
+        assert_eq!(s1500.keep_duration_ms, 900);
+        assert_eq!(middle_silence(1510, &p).action, SegmentAction::Compress);
+    }
+
+    /// しきい値は、パディングを付ける前の「耳に聞こえる間」で判定する。
+    /// パディング 400ms のとき、間 1500ms の無音セグメントは 1100ms しか残っていないが、
+    /// 間としては natural のしきい値 1500ms に達しているので短縮される
+    #[test]
+    fn threshold_uses_pause_before_padding() {
+        let p = Preset::natural();
+        let params = VadParams::default();
+
+        let t = gen(&[seg(1000, 2000), seg(3400, 4400)], 5400, &params, &p);
+        let mid = t.segments[2];
+        assert_eq!(mid.kind, SegmentKind::Silence);
+        assert_eq!(mid.source_duration_ms(), 1000);
+        assert_eq!(mid.action, SegmentAction::Keep, "間 1400ms は短縮しない");
+
+        let t = gen(&[seg(1000, 2000), seg(3500, 4500)], 5500, &params, &p);
+        let mid = t.segments[2];
+        assert_eq!(mid.source_duration_ms(), 1100);
+        assert_eq!(mid.action, SegmentAction::Compress);
+        // 残す間 900ms のうち 400ms はパディングが担うため、セグメントには 500ms 残す
+        assert_eq!(mid.keep_duration_ms, 500);
     }
 
     /// パディング (前150 + 後250 = 400ms) と無音長の関係。
@@ -375,20 +424,20 @@ mod tests {
     /// 冒頭・末尾の無音は trim_edges によりしきい値未満でも短縮される
     #[test]
     fn edges_are_trimmed_below_threshold() {
-        let p = Preset::natural(); // threshold 3000ms, target 1200ms
+        let p = Preset::natural(); // threshold 1500ms, target 900ms
         let speech = [seg(2000, 4000)];
         let t = gen(&speech, 6000, &no_pad(), &p);
         assert_eq!(t.segments.len(), 3);
         assert_eq!(t.segments[0].action, SegmentAction::Compress);
-        assert_eq!(t.segments[0].keep_duration_ms, 1200);
+        assert_eq!(t.segments[0].keep_duration_ms, 900);
         assert_eq!(t.segments[2].action, SegmentAction::Compress);
-        assert_eq!(t.segments[2].keep_duration_ms, 1200);
+        assert_eq!(t.segments[2].keep_duration_ms, 900);
     }
 
     /// 無音長が target より短ければ keep_duration はクランプされ Keep になる
     #[test]
     fn short_edge_silence_clamps_to_own_length() {
-        let p = Preset::natural(); // target 1200ms
+        let p = Preset::natural(); // target 900ms
         let speech = [seg(500, 2000)];
         let t = gen(&speech, 2000, &no_pad(), &p);
         assert_eq!(t.segments[0].keep_duration_ms, 500);
@@ -411,7 +460,7 @@ mod tests {
         let t = gen(&[], 10_000, &no_pad(), &p);
         assert_eq!(t.segments.len(), 1);
         assert_eq!(t.segments[0].action, SegmentAction::Compress);
-        assert_eq!(t.stats.output_duration_ms, 1200);
+        assert_eq!(t.stats.output_duration_ms, 900);
     }
 
     #[test]
@@ -439,9 +488,9 @@ mod tests {
         let p = Preset::natural();
         let speech = [seg(0, 1000), seg(5000, 6000)];
         let t = gen(&speech, 6000, &no_pad(), &p);
-        // [speech 0..1000][silence 1000..5000 → 先頭1200ms残し][speech 5000..6000]
+        // [speech 0..1000][silence 1000..5000 → 先頭900ms残し][speech 5000..6000]
         let ranges = timeline_to_keep_ranges(&t);
-        assert_eq!(ranges, vec![(0, 2200), (5000, 6000)]);
+        assert_eq!(ranges, vec![(0, 1900), (5000, 6000)]);
     }
 
     #[test]
@@ -483,20 +532,20 @@ mod tests {
             .find(|s| s.kind == SegmentKind::Silence && s.source_duration_ms() == 4000)
             .unwrap();
         assert_eq!(mid.action, SegmentAction::Compress);
-        assert_eq!(mid.keep_duration_ms, 1200);
+        assert_eq!(mid.keep_duration_ms, 900);
 
-        // 出力尺 = 500 (前) + 1200 (無音圧縮後) + 500 (後)
-        assert_eq!(t.stats.output_duration_ms, 2200);
+        // 出力尺 = 500 (前) + 900 (無音圧縮後) + 500 (後)
+        assert_eq!(t.stats.output_duration_ms, 1900);
     }
 
     /// トリム境界が圧縮無音の中にあるとき、範囲内の残り部分に keep が引き継がれる
     #[test]
     fn trim_inside_compressed_silence() {
-        let p = Preset::natural(); // target 1200ms
+        let p = Preset::natural(); // target 900ms
         let mut t = gen(&[seg(0, 1000), seg(5000, 6000)], 6000, &no_pad(), &p);
         // 無音 (1000-5000) の途中 4500ms から残す
         apply_trim_range(&mut t, 4500, 6000).unwrap();
-        // 4500-5000 の 500ms は keep 1200 とクランプされ全部残る (Keep 扱い)
+        // 4500-5000 の 500ms は keep 900 とクランプされ全部残る (Keep 扱い)
         let part = t
             .segments
             .iter()
