@@ -1,7 +1,7 @@
 //! タイムラインに基づく動画の再構成、BGM ミックス、ラウドネス調整。
 //! ffmpeg のフィルタ式を生成する部分は純粋関数にしてテスト可能にしている
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -10,6 +10,21 @@ use crate::progress::CancelToken;
 
 use super::ffmpeg::Ffmpeg;
 use super::probe::probe_stream_durations;
+
+/// カットの継ぎ目に掛けるフェードの長さ。
+/// 部屋鳴りの波形が不連続につながるとプツッというノイズになるため、
+/// 継ぎ目の手前で音量を絞り、継ぎ目の後ろで戻す。
+/// 継ぎ目は必ず無音区間の中にできるので、この長さなら会話は削られない
+const CUT_FADE_MS: u64 = 20;
+
+/// フェードを掛けるあいだ、音声フレームを何サンプル単位に組み直すか。
+/// aselect も afade もフレーム単位でしか働かないため、
+/// 入力そのままのフレーム (AAC なら約 21ms) ではフェードが継ぎ目に届かない。
+/// 48kHz で約 5.3ms まで細かくすると、フェードが狙った位置へ収まる
+const CUT_FADE_FRAME_SAMPLES: u32 = 256;
+
+/// フェードを操作する afade へ付ける名前。asendcmd から指名するために要る
+const FADE_FILTER_NAME: &str = "afade@paecut";
 
 /// keep_ranges (ミリ秒) から select / aselect の判定式を作る
 fn build_select_expr(keep_ranges_ms: &[(u64, u64)]) -> String {
@@ -44,19 +59,87 @@ pub fn build_cut_video_filter(keep_ranges_ms: &[(u64, u64)], tail_ms: u64) -> St
     format!("[0:v]select='{expr}',setpts=N/FRAME_RATE/TB{tail}[v]\n")
 }
 
+/// 継ぎ目のフェードを afade へ指示する asendcmd のコマンド列を作る。
+///
+/// afade は1回分のフェードしか持てないので、継ぎ目ごとに設定を送り直して使い回す。
+/// 継ぎ目の数だけ afade を並べる手もあるが、フィルタが増えるほど1フレームあたりの
+/// 処理が重くなり、継ぎ目が数百ある収録では現実的な速さでなくなる
+pub fn build_cut_fade_commands(keep_ranges_ms: &[(u64, u64)]) -> String {
+    let mut commands = String::new();
+    for (i, (start, end)) in keep_ranges_ms.iter().enumerate() {
+        // 区間がフェードより短ければ、その区間の長さに収める
+        let fade = CUT_FADE_MS.min(end.saturating_sub(*start));
+        if fade == 0 {
+            continue;
+        }
+        // 最初の区間の始まりと最後の区間の終わりは継ぎ目ではないので触らない
+        if i > 0 {
+            commands.push_str(&fade_command(*start, fade, "in"));
+        }
+        if i + 1 < keep_ranges_ms.len() {
+            commands.push_str(&fade_command(end - fade, fade, "out"));
+        }
+    }
+    commands
+}
+
+/// asendcmd のコマンド1行。指定した時刻に afade の向き・開始位置・長さを設定し直す
+fn fade_command(at_ms: u64, fade_ms: u64, direction: &str) -> String {
+    let at = at_ms as f64 / 1000.0;
+    let d = fade_ms as f64 / 1000.0;
+    let f = FADE_FILTER_NAME;
+    format!("{at:.3} {f} type {direction}, {f} start_time {at:.3}, {f} duration {d:.3};\n")
+}
+
+/// ffmpeg のフィルタ記述へ埋め込めるようにパスを整える。
+/// Windows のドライブレターのコロンは、そのままだと引数の区切りと解釈されてしまう
+fn escape_filter_path(path: &Path) -> String {
+    path.display()
+        .to_string()
+        .replace('\\', "/")
+        .replace(':', "\\:")
+}
+
 /// 音声チェーンのフィルタスクリプトを生成する。
 ///
 /// asetpts でタイムスタンプをゼロから振り直し、
 /// aresample=async=1 で微小なギャップを吸収する。
-/// `tail_ms` を指定すると末尾に無音のパディングを足す
-pub fn build_cut_audio_filter(keep_ranges_ms: &[(u64, u64)], tail_ms: u64) -> String {
+/// `tail_ms` を指定すると末尾に無音のパディングを足す。
+/// `fade_commands` にコマンドファイルのパスを渡すと、カットの継ぎ目にフェードを掛ける
+pub fn build_cut_audio_filter(
+    keep_ranges_ms: &[(u64, u64)],
+    tail_ms: u64,
+    fade_commands: Option<&Path>,
+) -> String {
     let expr = build_select_expr(keep_ranges_ms);
     let tail = if tail_ms > 0 {
         format!(",apad=pad_dur={:.3}", tail_ms as f64 / 1000.0)
     } else {
         String::new()
     };
-    format!("[0:a]aselect='{expr}',asetpts=N/SR/TB,aresample=async=1{tail}[a]\n")
+    let fade = match fade_commands {
+        Some(path) => format!(
+            "asetnsamples=n={}:p=0,asendcmd=filename='{}',{}=t=in:st=0:d={:.3},",
+            CUT_FADE_FRAME_SAMPLES,
+            escape_filter_path(path),
+            FADE_FILTER_NAME,
+            CUT_FADE_MS as f64 / 1000.0
+        ),
+        None => String::new(),
+    };
+    format!("[0:a]{fade}aselect='{expr}',asetpts=N/SR/TB,aresample=async=1{tail}[a]\n")
+}
+
+/// 継ぎ目のフェード用コマンドを一時ファイルへ書き出す。
+/// 継ぎ目がなければ書き出さず None を返し、フェードの仕組みごと省く
+fn write_fade_commands(dir: &Path, keep_ranges_ms: &[(u64, u64)]) -> Result<Option<PathBuf>> {
+    let commands = build_cut_fade_commands(keep_ranges_ms);
+    if commands.is_empty() {
+        return Ok(None);
+    }
+    let path = dir.join("fade-commands.txt");
+    std::fs::write(&path, commands)?;
+    Ok(Some(path))
 }
 
 /// 出力動画のエンコード設定
@@ -166,11 +249,15 @@ pub fn cut_media(
             cancel,
         )?
     } else {
-        // 音声のみ: 中間ファイルは可逆の FLAC にして多段エンコードの劣化を避ける
+        // 音声のみ: 中間ファイルは可逆の FLAC にして多段エンコードの劣化を避ける。
+        // フェード用のコマンドファイルは ffmpeg が読み終えるまで消えないよう、
+        // 一時ディレクトリごとこのスコープで抱えておく
+        let fade_dir = tempfile::Builder::new().prefix("pae-fade-").tempdir()?;
+        let fade_commands = write_fade_commands(fade_dir.path(), keep_ranges_ms)?;
         run_with_filter_script(
             ffmpeg,
             input,
-            &build_cut_audio_filter(keep_ranges_ms, tail_ms),
+            &build_cut_audio_filter(keep_ranges_ms, tail_ms, fade_commands.as_deref()),
             &["-map", "[a]", "-c:a", "flac", "-ar", "48000"].map(String::from),
             output,
             Some(output_duration_ms),
@@ -199,6 +286,7 @@ fn cut_video_and_audio(
     let parts_dir = tempfile::Builder::new().prefix("pae-cut-").tempdir()?;
     let video_part = parts_dir.path().join("video.mp4");
     let audio_part = parts_dir.path().join("audio.m4a");
+    let fade_commands = write_fade_commands(parts_dir.path(), keep_ranges_ms)?;
 
     // 音声側は独立したキャンセル用トークンで動かす。
     // 映像側が失敗したときに、無駄になった音声処理をすぐ止めるため
@@ -208,7 +296,7 @@ fn cut_video_and_audio(
         let cancel = audio_cancel.clone();
         let input = input.to_path_buf();
         let output = audio_part.clone();
-        let script = build_cut_audio_filter(keep_ranges_ms, tail_ms);
+        let script = build_cut_audio_filter(keep_ranges_ms, tail_ms, fade_commands.as_deref());
         std::thread::spawn(move || {
             run_with_filter_script(
                 &ffmpeg,
@@ -682,7 +770,7 @@ mod tests {
 
     #[test]
     fn cut_audio_filter_snapshot() {
-        let script = build_cut_audio_filter(&[(0, 2200), (5000, 6000)], 0);
+        let script = build_cut_audio_filter(&[(0, 2200), (5000, 6000)], 0, None);
         insta::assert_snapshot!(script, @r"
         [0:a]aselect='between(t,0.000,2.200)+between(t,5.000,6.000)',asetpts=N/SR/TB,aresample=async=1[a]
         ");
@@ -698,7 +786,7 @@ mod tests {
 
     #[test]
     fn cut_audio_filter_with_ending_tail() {
-        let script = build_cut_audio_filter(&[(0, 2200)], 3000);
+        let script = build_cut_audio_filter(&[(0, 2200)], 3000, None);
         insta::assert_snapshot!(script, @r"
         [0:a]aselect='between(t,0.000,2.200)',asetpts=N/SR/TB,aresample=async=1,apad=pad_dur=3.000[a]
         ");
@@ -718,6 +806,53 @@ mod tests {
     fn short_output_uses_minimum_tolerance() {
         assert!(duration_within_tolerance(9_900, 8_000));
         assert!(!duration_within_tolerance(11_000, 8_000));
+    }
+
+    #[test]
+    fn cut_audio_filter_with_fade_snapshot() {
+        let script = build_cut_audio_filter(
+            &[(0, 2200), (5000, 6000)],
+            0,
+            Some(Path::new("/tmp/pae/fade-commands.txt")),
+        );
+        insta::assert_snapshot!(script, @r"
+        [0:a]asetnsamples=n=256:p=0,asendcmd=filename='/tmp/pae/fade-commands.txt',afade@paecut=t=in:st=0:d=0.020,aselect='between(t,0.000,2.200)+between(t,5.000,6.000)',asetpts=N/SR/TB,aresample=async=1[a]
+        ");
+    }
+
+    /// 継ぎ目ごとにフェードアウトとフェードインを1組ずつ送る。
+    /// 出力の先頭と末尾は継ぎ目ではないので触らない
+    #[test]
+    fn cut_fade_commands_snapshot() {
+        let commands = build_cut_fade_commands(&[(0, 2200), (5000, 6000), (9000, 9500)]);
+        insta::assert_snapshot!(commands, @r"
+        2.180 afade@paecut type out, afade@paecut start_time 2.180, afade@paecut duration 0.020;
+        5.000 afade@paecut type in, afade@paecut start_time 5.000, afade@paecut duration 0.020;
+        5.980 afade@paecut type out, afade@paecut start_time 5.980, afade@paecut duration 0.020;
+        9.000 afade@paecut type in, afade@paecut start_time 9.000, afade@paecut duration 0.020;
+        ");
+    }
+
+    /// 区間がフェードより短いときは、その区間の長さまでフェードを縮める
+    #[test]
+    fn cut_fade_commands_clamp_short_range() {
+        let commands = build_cut_fade_commands(&[(0, 2200), (5000, 5008), (9000, 9500)]);
+        assert!(commands.contains("5.000 afade@paecut type in"));
+        assert!(commands.contains("duration 0.008"));
+    }
+
+    /// 継ぎ目がひとつも無ければフェードの仕組みごと省く
+    #[test]
+    fn cut_fade_commands_empty_for_single_range() {
+        assert!(build_cut_fade_commands(&[(0, 2200)]).is_empty());
+    }
+
+    #[test]
+    fn filter_path_escapes_windows_drive_letter() {
+        assert_eq!(
+            escape_filter_path(Path::new(r"C:\tmp\fade.txt")),
+            r"C\:/tmp/fade.txt"
+        );
     }
 
     #[test]
