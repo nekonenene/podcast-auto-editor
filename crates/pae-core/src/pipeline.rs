@@ -72,7 +72,11 @@ impl JobSpec {
 pub struct JobReport {
     pub outputs: Vec<PathBuf>,
     pub source_duration_ms: u64,
+    /// 編集の対象になった範囲の長さ。出力範囲の指定がなければ入力の長さと同じ
+    pub edited_range_ms: u64,
     pub output_duration_ms: u64,
+    /// 出力の末尾へ足した BGM 余韻の長さ。BGM なしなら 0
+    pub tail_ms: u64,
     pub timings: Vec<StageTiming>,
     pub total_duration: Duration,
 }
@@ -203,9 +207,11 @@ pub fn run_job(spec: &JobSpec, sink: &dyn ProgressSink, cancel: &CancelToken) ->
     };
 
     // 出力範囲が指定されていれば、範囲外を Remove にする
+    let mut edited_range_ms = info.duration_ms;
     if let Some((start_ms, end_ms)) = spec.trim_range_ms {
         let end_ms = end_ms.min(info.duration_ms);
         crate::timeline::apply_trim_range(&mut timeline, start_ms, end_ms)?;
+        edited_range_ms = end_ms.saturating_sub(start_ms);
         tracing::info!(start_ms, end_ms, "出力範囲を適用しました");
     }
 
@@ -365,7 +371,9 @@ pub fn run_job(spec: &JobSpec, sink: &dyn ProgressSink, cancel: &CancelToken) ->
     Ok(JobReport {
         outputs,
         source_duration_ms: info.duration_ms,
+        edited_range_ms,
         output_duration_ms: output_ms,
+        tail_ms,
         timings: runner.timings,
         total_duration: job_started.elapsed(),
     })

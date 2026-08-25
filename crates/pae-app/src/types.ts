@@ -114,7 +114,9 @@ export interface StageSeconds {
 export interface JobResult {
   outputs: string[];
   sourceDurationMs: number;
+  editedRangeMs: number;
   outputDurationMs: number;
+  tailMs: number;
   timings: StageSeconds[];
   totalSeconds: number;
   realTimeFactor: number;

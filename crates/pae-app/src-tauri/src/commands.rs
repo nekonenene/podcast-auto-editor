@@ -68,7 +68,9 @@ pub struct JobRequest {
 pub struct JobResult {
     pub outputs: Vec<String>,
     pub source_duration_ms: u64,
+    pub edited_range_ms: u64,
     pub output_duration_ms: u64,
+    pub tail_ms: u64,
     pub timings: Vec<StageSeconds>,
     pub total_seconds: f64,
     pub real_time_factor: f64,
@@ -206,7 +208,9 @@ pub async fn start_job(
             .map(|p| p.display().to_string())
             .collect(),
         source_duration_ms: report.source_duration_ms,
+        edited_range_ms: report.edited_range_ms,
         output_duration_ms: report.output_duration_ms,
+        tail_ms: report.tail_ms,
         timings: report
             .timings
             .iter()

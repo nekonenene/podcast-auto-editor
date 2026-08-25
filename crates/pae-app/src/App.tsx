@@ -36,6 +36,21 @@ function formatDuration(ms: number): string {
   return `${m}分${String(s).padStart(2, "0")}秒`;
 }
 
+// 完成メッセージの「80分00秒 → 72分10秒（9.7% 短縮）」を組み立てる。
+// 元動画の長さでなく編集した範囲を基準にしないと、範囲選択で切った分まで短縮に見えてしまう。
+// BGM の余韻も無音短縮の成果ではないため、短縮率から外して末尾へ添える
+function formatShrinkSummary(result: JobResult): string {
+  const editedMs = result.outputDurationMs - result.tailMs;
+  const rate = 100 * (1 - editedMs / result.editedRangeMs);
+  const summary = `${formatDuration(result.editedRangeMs)} → ${formatDuration(
+    editedMs,
+  )}（${rate.toFixed(1)}% 短縮）`;
+  if (result.tailMs === 0) {
+    return summary;
+  }
+  return `${summary} ＋ BGM余韻 ${Math.round(result.tailMs / 1000)}秒`;
+}
+
 // パス操作は Windows の "\" と macOS/Linux の "/" の両方に対応する
 
 function fileName(path: string): string {
@@ -642,13 +657,8 @@ function App() {
         <section className="result">
           <h2>完成しました 🎉</h2>
           <p>
-            {formatDuration(result.sourceDurationMs)} →{" "}
-            {formatDuration(result.outputDurationMs)}（
-            {(
-              100 *
-              (1 - result.outputDurationMs / result.sourceDurationMs)
-            ).toFixed(1)}
-            % 短縮）・処理 {Math.round(result.totalSeconds)}秒
+            {formatShrinkSummary(result)}・処理 {Math.round(result.totalSeconds)}
+            秒
           </p>
           <ul className="outputs">
             {result.outputs.map((path) => (
