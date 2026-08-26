@@ -1,12 +1,20 @@
 //! 話者埋め込みをクラスタへ分ける純粋関数。I/O を持たないためテストしやすい
 
-/// クラスタ重心からこれ以上離れた区間は、話者を決めきれなかったものとして扱う。
+/// 話者の重心からこれ以上離れた窓は、話者を決めきれなかったものとして扱う。
 /// コサイン距離で表し、0 が同じ向き、1 が無関係、2 が真逆になる。
 ///
-/// 話者認識用の音声で試したところ、同じ話者どうしは 0.33〜0.38、
-/// 別の話者どうしは 0.64 以上に開いた。重心との距離は組どうしより縮むため、
-/// その間に線を引いている
-pub const DEFAULT_MAX_CENTER_DISTANCE: f32 = 0.55;
+/// この値は判定用の短い窓に合わせてある。短い窓は音の情報が少ないぶん
+/// 重心から離れやすく、長い窓と同じ厳しさで切ると半分近くを捨ててしまう。
+/// 5分の音声で測ったところ、最短距離の中央値が 0.554、90%点が 0.795 だった。
+/// 0.75 なら 8割の窓へラベルが付き、そのうち誤りは 1 個 (0.1%) に収まる
+pub const DEFAULT_MAX_CENTER_DISTANCE: f32 = 0.75;
+
+/// もっとも近い話者と次に近い話者の距離差が、これを下回るなら話者を決めない。
+/// 距離そのものは近くても、どちらの話者にも同じくらい近ければ当てずっぽうになるため。
+///
+/// 実測した誤りの差は 0.002 / 0.002 / 0.016 / 0.016 / 0.071 / 0.136 で、
+/// ここに線を引くと 5 個の判定を諦めるだけで誤りが 6 件から 2 件へ減った
+pub const MIN_SPEAKER_MARGIN: f32 = 0.02;
 
 /// 埋め込みひとつ分の判定結果
 #[derive(Debug, Clone, PartialEq)]
@@ -35,38 +43,70 @@ impl SpeakerAssignment {
     }
 }
 
+/// クラスタリングの結果
+#[derive(Debug, Clone, Default)]
+pub struct Clustering {
+    /// 入力と同じ並びの判定結果
+    pub assignments: Vec<SpeakerAssignment>,
+    /// 話者ごとの重心。並びは話者番号と同じ。
+    /// あとから短い窓の話者を決めるときは、ここへ照らす
+    pub centers: Vec<Vec<f32>>,
+}
+
 /// 埋め込み列を指定した人数へ分ける。
 ///
-/// 戻り値は入力と同じ並びで、クラスタ重心から遠すぎる区間は話者なしになる。
 /// クラスタ番号は最初に現れた順へ振り直すため、
 /// 入力を時間順に並べておけば「最初に喋った人が 0 番」になる
 pub fn cluster_speakers(
     embeddings: &[Vec<f32>],
     speaker_count: usize,
     max_center_distance: f32,
-) -> Vec<SpeakerAssignment> {
+) -> Clustering {
     if embeddings.is_empty() {
-        return Vec::new();
+        return Clustering::default();
     }
     let normalized: Vec<Vec<f32>> = embeddings.iter().map(|e| l2_normalize(e)).collect();
     let merged = agglomerate(&normalized, speaker_count.max(1));
     let labels = renumber_by_first_appearance(&merged);
 
     let centers = cluster_centers(&normalized, &labels);
-    labels
+    let assignments = normalized
+        .iter()
+        .map(|embedding| nearest_speaker(&centers, embedding, max_center_distance))
+        .collect();
+    Clustering {
+        assignments,
+        centers,
+    }
+}
+
+/// 学習済みの重心へ照らして、埋め込みひとつの話者を決める。
+/// どの重心からも遠ければ話者なしにする
+pub fn nearest_speaker(
+    centers: &[Vec<f32>],
+    embedding: &[f32],
+    max_center_distance: f32,
+) -> SpeakerAssignment {
+    let normalized = l2_normalize(embedding);
+    let distances: Vec<f32> = centers
+        .iter()
+        .map(|center| cosine_distance(&normalized, center))
+        .collect();
+    let nearest = distances
         .iter()
         .enumerate()
-        .map(|(i, &label)| {
-            let distances: Vec<f32> = centers
-                .iter()
-                .map(|center| cosine_distance(&normalized[i], center))
-                .collect();
-            SpeakerAssignment {
-                speaker: (distances[label] <= max_center_distance).then_some(label),
-                distances,
-            }
-        })
-        .collect()
+        .min_by(|(_, a), (_, b)| a.total_cmp(b))
+        .map(|(i, _)| i);
+    let mut sorted = distances.clone();
+    sorted.sort_by(|a, b| a.total_cmp(b));
+    let decisive = match sorted.as_slice() {
+        [best, second, ..] => second - best >= MIN_SPEAKER_MARGIN,
+        // 話者がひとりだけなら比べる相手がいないので、距離だけで判断する
+        _ => true,
+    };
+
+    let speaker = nearest.filter(|&i| distances[i] <= max_center_distance && decisive);
+    SpeakerAssignment { speaker, distances }
 }
 
 /// 平均リンク法の凝集型クラスタリング。
@@ -187,6 +227,7 @@ mod tests {
     /// 話者番号だけを取り出す。距離まで見ないテストのためのヘルパ
     fn speakers(embeddings: &[Vec<f32>], count: usize, max_distance: f32) -> Vec<Option<usize>> {
         cluster_speakers(embeddings, count, max_distance)
+            .assignments
             .iter()
             .map(|a| a.speaker)
             .collect()
@@ -233,7 +274,7 @@ mod tests {
 
     #[test]
     fn empty_input() {
-        assert!(cluster_speakers(&[], 2, 1.0).is_empty());
+        assert!(cluster_speakers(&[], 2, 1.0).assignments.is_empty());
     }
 
     /// 重心から遠く離れた区間は話者を決めきれなかったものとして None になる
@@ -246,7 +287,7 @@ mod tests {
             vec![0.0, 1.0, 0.0],
         ];
         // 最後のひとつだけが直交しており、コサイン距離が大きく開く
-        let result = cluster_speakers(&embeddings, 1, 0.5);
+        let result = cluster_speakers(&embeddings, 1, 0.5).assignments;
         assert_eq!(result[0].speaker, Some(0));
         assert_eq!(result[3].speaker, None);
         assert!(
@@ -258,6 +299,17 @@ mod tests {
 
     /// どちらの話者にも近い区間は margin が小さくなる。
     /// 発話が混ざった区間を見つける手がかりになる
+    /// どちらの話者からも同じくらいの距離なら、近くても話者を決めない
+    #[test]
+    fn undecided_when_both_speakers_are_equally_close() {
+        let centers = vec![vec![1.0, 0.0, 0.0], vec![0.0, 1.0, 0.0]];
+        let middle = nearest_speaker(&centers, &[1.0, 1.0, 0.0], 1.0);
+        assert_eq!(middle.speaker, None, "中間を向いたベクトルは決めきれない");
+
+        let clear = nearest_speaker(&centers, &[1.0, 0.1, 0.0], 1.0);
+        assert_eq!(clear.speaker, Some(0));
+    }
+
     #[test]
     fn margin_shrinks_for_ambiguous_segments() {
         let embeddings = vec![
@@ -266,7 +318,7 @@ mod tests {
             // ふたつの話者のちょうど中間を向いたベクトル
             vec![1.0, 1.0, 0.0],
         ];
-        let result = cluster_speakers(&embeddings, 2, 1.0);
+        let result = cluster_speakers(&embeddings, 2, 1.0).assignments;
         let ambiguous = result[2].margin().unwrap();
         let clear = result[0].margin().unwrap();
         assert!(

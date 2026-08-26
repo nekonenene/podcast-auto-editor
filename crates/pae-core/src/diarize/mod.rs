@@ -15,13 +15,17 @@ use crate::error::Result;
 use crate::progress::CancelToken;
 use crate::types::TranscriptSegment;
 use assign::assign_speakers;
-use cluster::cluster_speakers;
+use cluster::{cluster_speakers, nearest_speaker};
 use embed::SpeakerEmbedder;
-use window::split_into_windows;
+use window::{assign_windows, learn_windows};
 
-/// これより短い窓は埋め込みが安定しないため、クラスタリングへ参加させない。
+/// これより短い窓は埋め込みが安定しないため、埋め込みを取らずに話者不明とする。
 /// 日本語の相槌はこの長さを下回ることが多く、混ぜるとクラスタの重心が濁る
 const MIN_EMBEDDING_MS: u64 = 400;
+
+/// 進捗表示のうち、話者を学ぶ段が占める割合。
+/// 学習用の窓は数が少ないぶん1個あたりが重いため、半々くらいで見ておく
+const LEARN_PROGRESS_SHARE: f32 = 0.5;
 
 /// 話者を決められなかった区間へ付けるラベル。
 /// 話者分離をしていない状態 (None) と区別できるよう、明示的な文字列にしている
@@ -89,39 +93,38 @@ pub fn diarize(
 ) -> Result<Vec<SpeechSpeaker>> {
     let mut embedder = SpeakerEmbedder::load(model_path)?;
 
-    // 発話区間をそのまま1単位にすると、話者の交代をまたいだ区間から
-    // ふたりの声が混ざったベクトルができるため、短い窓へ切り分けてから埋め込みを取る
-    let windows: Vec<(u64, u64)> = ranges
-        .iter()
-        .flat_map(|&(start_ms, end_ms)| split_into_windows(start_ms, end_ms))
-        .collect();
+    // 話者を学ぶ段。長めの窓から重心を作る。
+    // 短い窓ではクラスタが作れないため、ここは長さを優先する
+    let learn = learn_windows(ranges);
+    let learn_embeddings = embed_windows(
+        &mut embedder,
+        samples,
+        sample_rate,
+        &learn,
+        &mut |f| on_progress(f * LEARN_PROGRESS_SHARE),
+        cancel,
+    )?;
 
-    // 短すぎる窓は埋め込みが安定しないので取らず、あとで話者不明として戻す
-    let targets: Vec<usize> = windows
-        .iter()
-        .enumerate()
-        .filter(|(_, (start, end))| end.saturating_sub(*start) >= MIN_EMBEDDING_MS)
-        .map(|(i, _)| i)
-        .collect();
-
-    let mut embeddings = Vec::with_capacity(targets.len());
-    for (done, &index) in targets.iter().enumerate() {
-        cancel.check()?;
-        on_progress(done as f32 / targets.len().max(1) as f32);
-
-        let (start_ms, end_ms) = windows[index];
-        let slice = slice_samples(samples, sample_rate, start_ms, end_ms);
-        embeddings.push(embedder.embed(slice)?);
-    }
-    on_progress(1.0);
-
-    let clustered = cluster_speakers(
-        &embeddings,
+    let clustering = cluster_speakers(
+        &learn_embeddings.embeddings,
         params.speaker_count as usize,
         params.max_center_distance,
     );
 
-    let mut result: Vec<SpeechSpeaker> = windows
+    // 話者を判定する段。短い窓を、できあがった重心へ照らす。
+    // 長い発言に挟まった短い発言を、周りへ飲まれる前に拾うため
+    let assign = assign_windows(ranges);
+    let assign_embeddings = embed_windows(
+        &mut embedder,
+        samples,
+        sample_rate,
+        &assign,
+        &mut |f| on_progress(LEARN_PROGRESS_SHARE + f * (1.0 - LEARN_PROGRESS_SHARE)),
+        cancel,
+    )?;
+    on_progress(1.0);
+
+    let mut result: Vec<SpeechSpeaker> = assign
         .iter()
         .map(|&(start_ms, end_ms)| SpeechSpeaker {
             start_ms,
@@ -130,11 +133,54 @@ pub fn diarize(
             distances: Vec::new(),
         })
         .collect();
-    for (&index, assignment) in targets.iter().zip(clustered) {
+    for (&index, embedding) in assign_embeddings
+        .indexes
+        .iter()
+        .zip(&assign_embeddings.embeddings)
+    {
+        let assignment =
+            nearest_speaker(&clustering.centers, embedding, params.max_center_distance);
         result[index].speaker = assignment.speaker;
         result[index].distances = assignment.distances;
     }
     Ok(result)
+}
+
+/// 埋め込みを取れた窓と、その窓が元の一覧で何番目だったか
+struct Embeddings {
+    indexes: Vec<usize>,
+    embeddings: Vec<Vec<f32>>,
+}
+
+/// 窓ごとに埋め込みを求める。短すぎる窓は飛ばす
+fn embed_windows(
+    embedder: &mut SpeakerEmbedder,
+    samples: &[i16],
+    sample_rate: u32,
+    windows: &[(u64, u64)],
+    on_progress: &mut dyn FnMut(f32),
+    cancel: &CancelToken,
+) -> Result<Embeddings> {
+    let indexes: Vec<usize> = windows
+        .iter()
+        .enumerate()
+        .filter(|(_, (start, end))| end.saturating_sub(*start) >= MIN_EMBEDDING_MS)
+        .map(|(i, _)| i)
+        .collect();
+
+    let mut embeddings = Vec::with_capacity(indexes.len());
+    for (done, &index) in indexes.iter().enumerate() {
+        cancel.check()?;
+        on_progress(done as f32 / indexes.len().max(1) as f32);
+
+        let (start_ms, end_ms) = windows[index];
+        let slice = slice_samples(samples, sample_rate, start_ms, end_ms);
+        embeddings.push(embedder.embed(slice)?);
+    }
+    Ok(Embeddings {
+        indexes,
+        embeddings,
+    })
 }
 
 /// 話者分離の結果を文字起こしのセグメントへ書き込む
