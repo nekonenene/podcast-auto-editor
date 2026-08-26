@@ -28,6 +28,7 @@ macOS / Apple Silicon を最優先としつつ、Windows でも開発モード�
 - コア/CLI: Rust (Cargo workspace)。GUI は Tauri 2 + React + TS (crates/pae-app)
 - VAD: Silero VAD (`voice_activity_detector` crate)
 - 文字起こし: whisper.cpp (`whisper-rs`)。macOS は Metal、Windows は `cuda` feature で GPU 推論。デフォルトモデル large-v3-turbo q5_0
+- 話者分離: WeSpeaker ResNet34 の話者埋め込み (ONNX)。特徴量は `knf-rs`、推論は `ort`
 - メディア処理: ffmpeg 外部プロセス（開発時は PATH の ffmpeg、配布時は sidecar 予定）
 
 ## コマンド
@@ -43,6 +44,7 @@ make check     # fmt + clippy + tsc + test をまとめて実行
 cargo run -p pae-cli -- run input.mp4 -o output --bgm bgm.mp3
 cargo run -p pae-cli -- analyze input.mp4       # timeline.json 生成のみ
 cargo run -p pae-cli -- dev --help              # 検証用低レベルコマンド
+cargo run -p pae-cli -- dev diarize input.mp4 --speakers 2  # 話者分離だけを確認する（--max-distance でしきい値を調整）
 ```
 
 変更後は `make check` を必ず実行する。
@@ -50,7 +52,7 @@ cargo run -p pae-cli -- dev --help              # 検証用低レベルコマン
 ## アーキテクチャ
 
 - UI から FFmpeg や文字起こし処理を直接呼ばない。`pae_core::pipeline::run_job` を入口にする
-- MediaProcessor (media/) / Vad (vad.rs) / Transcriber (transcribe/) / TimelineGenerator (timeline.rs) の責務を混在させない
+- MediaProcessor (media/) / Vad (vad.rs) / Transcriber (transcribe/) / Diarizer (diarize/) / TimelineGenerator (timeline.rs) の責務を混在させない
 - timeline.rs は純粋関数のみ。I/O を持ち込まない
 - ffmpeg のフィルタ式生成は純粋関数にしてスナップショットテストする
 - 将来の差し替えを考慮するが、過度な抽象化は避ける（trait は Vad / Transcriber / ProgressSink のみ）

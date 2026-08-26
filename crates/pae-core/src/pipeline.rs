@@ -1,5 +1,5 @@
 //! パイプライン全体のオーケストレーション。
-//! probe → 音声抽出 → VAD → タイムライン → カット → BGM → loudnorm → MP3 → 文字起こし → 出力
+//! probe → 音声抽出 → VAD → タイムライン → カット → BGM → loudnorm → MP3 → 文字起こし → 話者分離 → 出力
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 use serde::Serialize;
 
 use crate::config::{AppConfig, OutputSelection};
+use crate::diarize::model::EMBEDDING_MODEL;
 use crate::error::{PaeError, Result};
 use crate::media::extract::{extract_analysis_wav, read_wav_samples};
 use crate::media::ffmpeg::Ffmpeg;
@@ -17,7 +18,9 @@ use crate::media::process::{
 };
 use crate::output::render;
 use crate::progress::{CancelToken, ProgressReport, ProgressSink, Stage};
-use crate::timeline::{generate_timeline, timeline_to_keep_ranges, validate_timeline};
+use crate::timeline::{
+    generate_timeline, timeline_to_keep_ranges, timeline_to_speech_ranges, validate_timeline,
+};
 use crate::transcribe::model::{find_model, ModelManager};
 use crate::transcribe::{Transcriber, WhisperTranscriber};
 use crate::types::{EditTimeline, MediaInfo, Preset, TranscriptSegment, VadParams};
@@ -35,6 +38,10 @@ pub struct JobSpec {
     pub target_lufs: f64,
     pub transcribe: bool,
     pub model: String,
+    /// 文字起こしへ話者ラベルを付けるか
+    pub diarize: bool,
+    /// 収録に参加している人数
+    pub speaker_count: u32,
     pub outputs: OutputSelection,
     /// Podcast MP3 のビットレート (kbps)
     pub mp3_bitrate_kbps: u32,
@@ -58,6 +65,8 @@ impl JobSpec {
             target_lufs: config.target_lufs,
             transcribe: config.transcribe,
             model: config.model.clone(),
+            diarize: config.diarize,
+            speaker_count: config.speaker_count,
             outputs: config.outputs.clone(),
             mp3_bitrate_kbps: config.mp3_bitrate_kbps,
             ffmpeg_dir: config.ffmpeg_dir.clone(),
@@ -336,13 +345,15 @@ pub fn run_job(spec: &JobSpec, sink: &dyn ProgressSink, cancel: &CancelToken) ->
         outputs.push(mp3_path);
     }
 
-    // 文字起こしは編集後の音声に対して行う。
-    // タイムスタンプが完成品の MP4 / MP3 と一致し、SRT がそのまま使えるため
+    // 文字起こしと話者分離は、カットが済んで BGM を混ぜる前の音声に対して行う。
+    // 尺はカットの時点で確定しているのでタイムスタンプは完成品の MP4 / MP3 と一致し、
+    // BGM が乗っていないぶん話者の声質も濁らない
     if want_transcribe {
         let segments = transcribe_media(
             &ffmpeg,
-            &edited_path,
+            &cut_path,
             output_ms,
+            &timeline,
             spec,
             sink,
             &mut runner,
@@ -412,12 +423,13 @@ pub fn analyze(
     })
 }
 
-/// 完成した動画から音声を抽出して文字起こしする
+/// カット済みの音声を取り出して文字起こしし、指定があれば話者ラベルも付ける
 #[allow(clippy::too_many_arguments)]
 fn transcribe_media(
     ffmpeg: &Ffmpeg,
     media: &Path,
     duration_ms: u64,
+    timeline: &EditTimeline,
     spec: &JobSpec,
     sink: &dyn ProgressSink,
     runner: &mut StageRunner,
@@ -429,30 +441,79 @@ fn transcribe_media(
     let manager = ModelManager::new()?;
 
     // モデルが未ダウンロードならここで取得する（初回のみネットワークを使う）
-    if !manager.is_downloaded(model_spec) {
-        sink.report(&ProgressReport {
-            stage: Stage::Transcribe,
-            fraction: Some(0.0),
-            message: Some(format!(
-                "文字起こしモデル {} (約{}MB) をダウンロード中",
-                model_spec.name, model_spec.approx_size_mb
-            )),
-        });
-    }
-    let mut on_dl_progress = |fraction: f32| {
-        sink.report(&ProgressReport {
-            stage: Stage::Transcribe,
-            fraction: Some(fraction),
-            message: Some("モデルをダウンロード中".into()),
-        });
+    let model_path =
+        ensure_model_with_progress(&manager, model_spec, Stage::Transcribe, sink, cancel)?;
+    let embedding_model_path = if spec.diarize {
+        Some(ensure_model_with_progress(
+            &manager,
+            &EMBEDDING_MODEL,
+            Stage::Diarize,
+            sink,
+            cancel,
+        )?)
+    } else {
+        None
     };
-    let model_path = manager.ensure_model(model_spec, &mut on_dl_progress, cancel)?;
 
-    runner.run(Stage::Transcribe, |p| {
-        let wav_path = temp_dir.join("transcribe.wav");
+    // 解析用の WAV は1回だけ抽出し、文字起こしと話者分離で使い回す
+    let wav_path = temp_dir.join("transcribe.wav");
+    let mut segments = runner.run(Stage::Transcribe, |p| {
         extract_analysis_wav(ffmpeg, media, &wav_path, duration_ms, &mut |_| {}, cancel)?;
         let (samples, _) = read_wav_samples(&wav_path)?;
         let mut transcriber = WhisperTranscriber::load(&model_path)?;
         transcriber.transcribe(&samples, "ja", p, cancel)
-    })
+    })?;
+
+    if let Some(embedding_model_path) = embedding_model_path {
+        let ranges = timeline_to_speech_ranges(timeline);
+        let speakers = runner.run(Stage::Diarize, |p| {
+            // WAV を読み直す。文字起こしの間サンプル列を抱えたままにせず、
+            // メモリの山をふたつ重ねないため
+            let (samples, sample_rate) = read_wav_samples(&wav_path)?;
+            crate::diarize::diarize(
+                &samples,
+                sample_rate,
+                &ranges,
+                &crate::diarize::DiarizeParams {
+                    speaker_count: spec.speaker_count,
+                    ..Default::default()
+                },
+                &embedding_model_path,
+                p,
+                cancel,
+            )
+        })?;
+        crate::diarize::label_transcript(&mut segments, &speakers);
+    }
+    Ok(segments)
+}
+
+/// モデルを用意する。未取得ならダウンロードの進捗を通知しながら取得する
+fn ensure_model_with_progress(
+    manager: &ModelManager,
+    spec: &crate::models::ModelSpec,
+    stage: Stage,
+    sink: &dyn ProgressSink,
+    cancel: &CancelToken,
+) -> Result<PathBuf> {
+    if !manager.is_downloaded(spec) {
+        sink.report(&ProgressReport {
+            stage,
+            fraction: Some(0.0),
+            message: Some(format!(
+                "{}モデル {} (約{}MB) をダウンロード中",
+                stage.label(),
+                spec.name,
+                spec.approx_size_mb
+            )),
+        });
+    }
+    let mut on_progress = |fraction: f32| {
+        sink.report(&ProgressReport {
+            stage,
+            fraction: Some(fraction),
+            message: Some("モデルをダウンロード中".into()),
+        });
+    };
+    manager.ensure_model(spec, &mut on_progress, cancel)
 }

@@ -84,6 +84,9 @@ function App() {
   const [transcribe, setTranscribe] = useState(true);
   const [model, setModel] = useState("large-v3-turbo");
   const [models, setModels] = useState<ModelInfo[]>([]);
+  const [diarize, setDiarize] = useState(false);
+  const [speakerCount, setSpeakerCount] = useState(2);
+  const [diarizeModel, setDiarizeModel] = useState<ModelInfo | null>(null);
   const [outputDir, setOutputDir] = useState<string | null>(null);
   const [fadeInS, setFadeInS] = useState(2.0);
   const [fadeOutS, setFadeOutS] = useState(4.0);
@@ -118,12 +121,17 @@ function App() {
         setMp3Bitrate(config.mp3_bitrate_kbps ?? 128);
         setTranscribe(config.transcribe);
         setModel(config.model);
+        setDiarize(config.diarize ?? false);
+        setSpeakerCount(config.speaker_count ?? 2);
         setOutputDir(config.output_dir);
       })
       .catch((e) => setError(String(e)));
     invoke<ModelInfo[]>("list_models")
       .then(setModels)
       .catch(() => setModels([]));
+    invoke<ModelInfo>("diarize_model_info")
+      .then(setDiarizeModel)
+      .catch(() => setDiarizeModel(null));
   }, []);
 
   const chooseVideo = useCallback(async (path: string) => {
@@ -297,6 +305,8 @@ function App() {
           preset,
           transcribe,
           model,
+          diarize,
+          speakerCount,
           // 全範囲のときは指定なし (トリムなし) として送る
           trimStartMs: trimStartMs > 0 ? trimStartMs : null,
           trimEndMs:
@@ -324,10 +334,11 @@ function App() {
   const activeStages = useMemo(() => {
     return STAGE_ORDER.filter((stage) => {
       if (stage === "mix_bgm") return bgm !== null;
+      if (stage === "diarize") return transcribe && diarize;
       if (stage === "transcribe" || stage === "write_outputs") return transcribe;
       return true;
     });
-  }, [bgm, transcribe]);
+  }, [bgm, transcribe, diarize]);
 
   const currentStageIndex = progress
     ? activeStages.indexOf(progress.stage)
@@ -591,6 +602,44 @@ function App() {
                   初回に約{selectedModel.approxSizeMb}MB
                   のモデルを自動ダウンロードします
                 </p>
+              )}
+              <label className="row">
+                <input
+                  type="checkbox"
+                  checked={diarize}
+                  onChange={(e) => setDiarize(e.target.checked)}
+                  disabled={running}
+                />
+                話者ラベルを付ける
+              </label>
+              {diarize && (
+                <>
+                  <label className="row">
+                    話者の人数
+                    <input
+                      type="number"
+                      min={2}
+                      max={6}
+                      value={speakerCount}
+                      onChange={(e) =>
+                        setSpeakerCount(
+                          Math.min(6, Math.max(2, Number(e.target.value) || 2)),
+                        )
+                      }
+                      disabled={running}
+                    />
+                  </label>
+                  <p className="hint">
+                    最初に喋った人が「話者1」になります。
+                    決めきれなかった発言は「話者不明」になります
+                  </p>
+                  {diarizeModel && !diarizeModel.downloaded && (
+                    <p className="hint">
+                      初回に約{diarizeModel.approxSizeMb}MB
+                      のモデルを自動ダウンロードします
+                    </p>
+                  )}
+                </>
               )}
             </>
           )}

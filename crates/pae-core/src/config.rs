@@ -83,6 +83,10 @@ pub struct AppConfig {
     /// 文字起こしモデル名
     pub model: String,
     pub transcribe: bool,
+    /// 文字起こしへ話者ラベルを付けるか
+    pub diarize: bool,
+    /// 収録に参加している人数。話者分離はこの数へ分ける
+    pub speaker_count: u32,
     /// ラウドネスターゲット (LUFS)
     pub target_lufs: f64,
     /// ffmpeg / ffprobe のあるディレクトリ (未指定なら PATH から探す)
@@ -102,6 +106,8 @@ impl Default for AppConfig {
             output_dir: None,
             model: "large-v3-turbo".into(),
             transcribe: true,
+            diarize: false,
+            speaker_count: 2,
             target_lufs: -16.0,
             ffmpeg_dir: None,
             outputs: OutputSelection::default(),

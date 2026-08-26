@@ -18,6 +18,7 @@ pub enum Stage {
     Loudnorm,
     RenderMp3,
     Transcribe,
+    Diarize,
     WriteOutputs,
 }
 
@@ -33,6 +34,7 @@ impl Stage {
             Stage::Loudnorm => "音量調整",
             Stage::RenderMp3 => "MP3出力",
             Stage::Transcribe => "文字起こし",
+            Stage::Diarize => "話者分離",
             Stage::WriteOutputs => "ファイル出力",
         }
     }

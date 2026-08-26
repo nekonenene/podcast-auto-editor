@@ -161,7 +161,12 @@ impl Preset {
     }
 }
 
-/// 文字起こしの1セグメント。話者分離を将来追加できるよう speaker を予約している
+/// 文字起こしの1セグメント。
+///
+/// speaker は3つの状態を表す。
+/// None なら話者分離をおこなっていない。
+/// 「話者1」「話者2」なら話者を特定できており、番号は最初に喋った人が1番になる。
+/// 「話者不明」なら話者分離はしたものの、どの話者か決めきれなかった
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TranscriptSegment {
     pub start_ms: u64,

@@ -13,6 +13,12 @@ tracing.workspace = true
 # Silero VAD (ONNX モデル同梱、ort 経由で推論)
 voice_activity_detector = "0.2.1"
 
+# 話者埋め込みの計算に使う。ort は voice_activity_detector が引いているものと
+# 同じバージョンにそろえてあり、onnxruntime が二重にリンクされない
+knf-rs = "0.3"
+ort = { version = "2.0.0-rc.10", features = ["ndarray"] }
+ndarray = "0.16"
+
 # whisper.cpp バインディング。macOS では Metal を有効化する
 whisper-rs = "0.16"
 

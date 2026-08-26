@@ -1,5 +1,6 @@
 pub mod analyze;
 pub mod dev;
+pub mod diarize;
 pub mod models;
 pub mod probe;
 pub mod render;

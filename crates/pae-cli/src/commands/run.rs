@@ -66,6 +66,14 @@ pub struct CommonOpts {
     /// 文字起こしの出力フォーマット (カンマ区切り: txt,json,srt,md)
     #[arg(long)]
     pub formats: Option<String>,
+
+    /// 文字起こしへ話者ラベルを付ける
+    #[arg(long)]
+    pub diarize: bool,
+
+    /// 収録に参加している人数。話者分離はこの数へ分ける
+    #[arg(long)]
+    pub speakers: Option<u32>,
 }
 
 #[derive(Args)]
@@ -144,6 +152,15 @@ pub fn build_spec(
     }
     if opts.skip_transcribe {
         spec.transcribe = false;
+    }
+    if opts.diarize {
+        spec.diarize = true;
+    }
+    if let Some(count) = opts.speakers {
+        if count == 0 {
+            anyhow::bail!("話者の人数は1以上を指定してください");
+        }
+        spec.speaker_count = count;
     }
     if let Some(formats) = &opts.formats {
         let formats = formats

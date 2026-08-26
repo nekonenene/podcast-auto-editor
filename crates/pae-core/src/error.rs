@@ -37,6 +37,9 @@ pub enum PaeError {
     #[error("文字起こしに失敗しました: {0}")]
     Transcribe(String),
 
+    #[error("話者分離に失敗しました: {0}")]
+    Diarize(String),
+
     #[error("モデルのダウンロードに失敗しました: {0}")]
     ModelDownload(String),
 

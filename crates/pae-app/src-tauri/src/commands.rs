@@ -9,6 +9,7 @@ use tauri::ipc::Channel;
 use tauri::State;
 
 use pae_core::config::AppConfig;
+use pae_core::diarize::model::EMBEDDING_MODEL;
 use pae_core::media::ffmpeg::Ffmpeg;
 use pae_core::media::probe::probe;
 use pae_core::pipeline::{run_job, JobSpec};
@@ -57,6 +58,10 @@ pub struct JobRequest {
     pub preset: String,
     pub transcribe: bool,
     pub model: String,
+    /// 文字起こしへ話者ラベルを付けるか
+    pub diarize: bool,
+    /// 収録に参加している人数
+    pub speaker_count: u32,
     /// 出力範囲 (ミリ秒)。全体を出力するときは None
     pub trim_start_ms: Option<u64>,
     pub trim_end_ms: Option<u64>,
@@ -109,6 +114,18 @@ pub fn list_models() -> Result<Vec<ModelInfo>, String> {
             downloaded: manager.is_downloaded(spec),
         })
         .collect())
+}
+
+/// 話者分離に使うモデルの状態を返す。初回ダウンロードの案内を出すために使う
+#[tauri::command]
+pub fn diarize_model_info() -> Result<ModelInfo, String> {
+    let manager = ModelManager::new().map_err(|e| e.to_string())?;
+    Ok(ModelInfo {
+        name: EMBEDDING_MODEL.name.to_string(),
+        approx_size_mb: EMBEDDING_MODEL.approx_size_mb,
+        description: EMBEDDING_MODEL.description.to_string(),
+        downloaded: manager.is_downloaded(&EMBEDDING_MODEL),
+    })
 }
 
 /// 波形表示用のデータ
@@ -235,6 +252,8 @@ fn build_spec_and_save_defaults(request: &JobRequest) -> Result<JobSpec, String>
     config.preset = request.preset.clone();
     config.model = request.model.clone();
     config.transcribe = request.transcribe;
+    config.diarize = request.diarize;
+    config.speaker_count = request.speaker_count;
     config.output_dir = Some(request.output_dir.clone());
     config.save().map_err(|e| e.to_string())?;
 
@@ -251,6 +270,8 @@ fn build_spec_and_save_defaults(request: &JobRequest) -> Result<JobSpec, String>
         target_lufs: config.target_lufs,
         transcribe: request.transcribe,
         model: request.model.clone(),
+        diarize: request.diarize,
+        speaker_count: request.speaker_count,
         outputs: config.outputs.clone(),
         mp3_bitrate_kbps: config.mp3_bitrate_kbps,
         ffmpeg_dir: config.ffmpeg_dir.clone(),

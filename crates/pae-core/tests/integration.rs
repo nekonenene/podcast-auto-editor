@@ -425,3 +425,41 @@ fn transcribe_produces_monotonic_segments() {
         prev_end = seg.end_ms;
     }
 }
+
+/// 話者分離の統合テスト。話者埋め込みモデルのダウンロードが必要なため #[ignore]。
+/// 実行: cargo test -p pae-core -- --ignored
+///
+/// 生成したトーンには人の声が入らないため、話者を正しく分けられるかまでは確かめられない。
+/// ここではモデルを読み込んで埋め込みを計算できること、
+/// 同じ音声からは同じ埋め込みが得られることを確かめる
+#[test]
+#[ignore]
+fn speaker_embedding_is_stable() {
+    use pae_core::diarize::embed::SpeakerEmbedder;
+    use pae_core::diarize::model::EMBEDDING_MODEL;
+    use pae_core::models::ModelManager;
+
+    let ffmpeg = ffmpeg();
+    let dir = tempfile::tempdir().unwrap();
+
+    let manager = ModelManager::new().unwrap();
+    let model_path = manager
+        .ensure_model(&EMBEDDING_MODEL, &mut |_| {}, &cancel())
+        .expect("話者埋め込みモデルの取得に失敗");
+
+    let input = generate_tone_video(&ffmpeg, dir.path());
+    let wav = dir.path().join("d.wav");
+    extract_analysis_wav(&ffmpeg, &input, &wav, 11_000, &mut |_| {}, &cancel()).unwrap();
+    let (samples, _) = read_wav_samples(&wav).unwrap();
+
+    let mut embedder = SpeakerEmbedder::load(&model_path).unwrap();
+    let first = embedder.embed(&samples).unwrap();
+    let second = embedder.embed(&samples).unwrap();
+
+    assert_eq!(first.len(), 256, "埋め込みの次元が想定と違います");
+    assert_eq!(first, second, "同じ音声から違う埋め込みが返りました");
+    assert!(
+        first.iter().any(|v| *v != 0.0),
+        "埋め込みがすべて 0 になっています"
+    );
+}

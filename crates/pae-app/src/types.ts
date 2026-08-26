@@ -60,6 +60,8 @@ export interface AppConfig {
   output_dir: string | null;
   model: string;
   transcribe: boolean;
+  diarize: boolean;
+  speaker_count: number;
   target_lufs: number;
   ffmpeg_dir: string | null;
   outputs: OutputSelection;
@@ -92,6 +94,7 @@ export type Stage =
   | "loudnorm"
   | "render_mp3"
   | "transcribe"
+  | "diarize"
   | "write_outputs";
 
 export interface ProgressEvent {
@@ -140,6 +143,7 @@ export const STAGE_LABELS: Record<Stage, string> = {
   loudnorm: "音量調整",
   render_mp3: "MP3出力",
   transcribe: "文字起こし",
+  diarize: "話者分離",
   write_outputs: "ファイル出力",
 };
 
@@ -153,5 +157,6 @@ export const STAGE_ORDER: Stage[] = [
   "loudnorm",
   "render_mp3",
   "transcribe",
+  "diarize",
   "write_outputs",
 ];

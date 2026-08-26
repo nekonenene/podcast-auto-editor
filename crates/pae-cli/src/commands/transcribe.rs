@@ -33,6 +33,14 @@ pub struct TranscribeArgs {
     /// 出力フォーマット (カンマ区切り: txt,json,srt,md)
     #[arg(long, default_value = "txt,json,srt,md")]
     pub formats: String,
+
+    /// 文字起こしへ話者ラベルを付ける
+    #[arg(long)]
+    pub diarize: bool,
+
+    /// 収録に参加している人数。話者分離はこの数へ分ける
+    #[arg(long, default_value_t = 2)]
+    pub speakers: u32,
 }
 
 pub fn execute(args: TranscribeArgs) -> anyhow::Result<()> {
@@ -84,7 +92,7 @@ pub fn execute(args: TranscribeArgs) -> anyhow::Result<()> {
         &cancel,
     )?;
 
-    let (samples, _) = read_wav_samples(&wav_path)?;
+    let (samples, sample_rate) = read_wav_samples(&wav_path)?;
     let mut transcriber = WhisperTranscriber::load(&model_path)?;
     let mut on_progress = |fraction: f32| {
         progress.report(&ProgressReport {
@@ -93,7 +101,22 @@ pub fn execute(args: TranscribeArgs) -> anyhow::Result<()> {
             message: None,
         });
     };
-    let segments = transcriber.transcribe(&samples, &args.language, &mut on_progress, &cancel)?;
+    let mut segments =
+        transcriber.transcribe(&samples, &args.language, &mut on_progress, &cancel)?;
+
+    if args.diarize {
+        let speakers = crate::commands::diarize::diarize_samples(
+            &samples,
+            sample_rate,
+            &pae_core::diarize::DiarizeParams {
+                speaker_count: args.speakers,
+                ..Default::default()
+            },
+            &progress,
+            &cancel,
+        )?;
+        pae_core::diarize::label_transcript(&mut segments, &speakers);
+    }
     progress.finish();
 
     std::fs::create_dir_all(&args.output)?;

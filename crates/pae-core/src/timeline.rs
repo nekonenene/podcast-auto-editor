@@ -302,6 +302,30 @@ pub fn timeline_to_keep_ranges(timeline: &EditTimeline) -> Vec<(u64, u64)> {
     ranges
 }
 
+/// タイムラインから「出力側の時間軸で見た発話区間」を導出する。
+///
+/// 話者分離は発話しているところだけを見ればよいので、VAD を掛け直さずにここから作る。
+/// 返す時刻は編集後のメディアに合わせたミリ秒で、カットされた区間は含まない
+pub fn timeline_to_speech_ranges(timeline: &EditTimeline) -> Vec<(u64, u64)> {
+    let mut ranges: Vec<(u64, u64)> = Vec::new();
+    let mut output_ms = 0;
+    for seg in &timeline.segments {
+        if seg.keep_duration_ms == 0 {
+            continue;
+        }
+        let start = output_ms;
+        output_ms += seg.keep_duration_ms;
+        if seg.kind != SegmentKind::Speech {
+            continue;
+        }
+        match ranges.last_mut() {
+            Some(last) if last.1 == start => last.1 = output_ms,
+            _ => ranges.push((start, output_ms)),
+        }
+    }
+    ranges
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -491,6 +515,26 @@ mod tests {
         // [speech 0..1000][silence 1000..5000 → 先頭900ms残し][speech 5000..6000]
         let ranges = timeline_to_keep_ranges(&t);
         assert_eq!(ranges, vec![(0, 1900), (5000, 6000)]);
+    }
+
+    /// speech ranges: 出力側の時間軸へ写す。縮んだ無音のぶんだけ後ろの発話が手前へ寄る
+    #[test]
+    fn speech_ranges_follow_the_output_timeline() {
+        let p = Preset::natural();
+        let speech = [seg(0, 1000), seg(5000, 6000)];
+        let t = gen(&speech, 6000, &no_pad(), &p);
+        // [speech 0..1000][silence 4000ms → 900ms へ短縮][speech 1000ms]
+        let ranges = timeline_to_speech_ranges(&t);
+        assert_eq!(ranges, vec![(0, 1000), (1900, 2900)]);
+    }
+
+    /// speech ranges: Remove されたセグメントは出力に現れないため飛ばされる
+    #[test]
+    fn speech_ranges_skip_removed_segments() {
+        let p = Preset::natural();
+        let mut t = gen(&[seg(0, 1000), seg(5000, 6000)], 6000, &no_pad(), &p);
+        apply_trim_range(&mut t, 5000, 6000).unwrap();
+        assert_eq!(timeline_to_speech_ranges(&t), vec![(0, 1000)]);
     }
 
     #[test]

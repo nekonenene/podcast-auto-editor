@@ -20,6 +20,7 @@ pub fn run() {
             commands::get_config,
             commands::save_settings,
             commands::list_models,
+            commands::diarize_model_info,
             commands::probe_media,
             commands::waveform,
             commands::allow_media_preview,

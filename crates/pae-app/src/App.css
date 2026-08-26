@@ -247,6 +247,7 @@ h1 {
 }
 
 select,
+input[type="number"],
 input[type="range"] {
   width: 100%;
   padding: 8px;
@@ -255,6 +256,11 @@ input[type="range"] {
   background: transparent;
   color: inherit;
   font-size: 13px;
+}
+
+/* 人数のような短い数値は、行の中へ収まる幅にする */
+input[type="number"] {
+  width: 72px;
 }
 
 input[type="range"] {
