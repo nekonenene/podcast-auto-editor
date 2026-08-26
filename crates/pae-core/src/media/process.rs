@@ -11,10 +11,13 @@ use crate::progress::CancelToken;
 use super::ffmpeg::Ffmpeg;
 use super::probe::probe_stream_durations;
 
-/// カットの継ぎ目に掛けるフェードの長さ。
+/// カットの継ぎ目に掛けるフェードアウトの長さ。
 /// 部屋鳴りの波形が不連続につながるとプツッというノイズになるため、
-/// 継ぎ目の手前で音量を絞り、継ぎ目の後ろで戻す。
-/// 継ぎ目は必ず無音区間の中にできるので、この長さなら会話は削られない
+/// 継ぎ目の手前で音量を絞ってから切る。
+/// 継ぎ目は必ず無音区間の中にできるので、この長さなら会話は削られない。
+///
+/// 継ぎ目の後ろにフェードインは掛けない。
+/// 聴き比べると、話し始めが鈍って聞き取りにくくなるため
 const CUT_FADE_MS: u64 = 20;
 
 /// フェードを掛けるあいだ、音声フレームを何サンプル単位に組み直すか。
@@ -59,36 +62,44 @@ pub fn build_cut_video_filter(keep_ranges_ms: &[(u64, u64)], tail_ms: u64) -> St
     format!("[0:v]select='{expr}',setpts=N/FRAME_RATE/TB{tail}[v]\n")
 }
 
-/// 継ぎ目のフェードを afade へ指示する asendcmd のコマンド列を作る。
+/// 継ぎ目のフェードアウトを afade へ指示する asendcmd のコマンド列を作る。
 ///
-/// afade は1回分のフェードしか持てないので、継ぎ目ごとに設定を送り直して使い回す。
+/// 残す区間の先頭ごとに「この区間はいつ絞り始めるか」を予約しておく。
+/// フェードアウトが終わったあと afade の音量は 0 のままになるが、
+/// 次の区間の先頭で次の予約を入れ直すため、そこで音量はもとに戻る。
+/// フェードインを挟まずに戻せるのはこの性質のおかげである。
+///
+/// afade は1回分のフェードしか持てないため、こうして1個を使い回す。
 /// 継ぎ目の数だけ afade を並べる手もあるが、フィルタが増えるほど1フレームあたりの
 /// 処理が重くなり、継ぎ目が数百ある収録では現実的な速さでなくなる
 pub fn build_cut_fade_commands(keep_ranges_ms: &[(u64, u64)]) -> String {
+    if keep_ranges_ms.len() < 2 {
+        return String::new();
+    }
     let mut commands = String::new();
     for (i, (start, end)) in keep_ranges_ms.iter().enumerate() {
         // 区間がフェードより短ければ、その区間の長さに収める
         let fade = CUT_FADE_MS.min(end.saturating_sub(*start));
-        if fade == 0 {
-            continue;
-        }
-        // 最初の区間の始まりと最後の区間の終わりは継ぎ目ではないので触らない
-        if i > 0 {
-            commands.push_str(&fade_command(*start, fade, "in"));
-        }
-        if i + 1 < keep_ranges_ms.len() {
-            commands.push_str(&fade_command(end - fade, fade, "out"));
-        }
+        let fade_at = if i + 1 < keep_ranges_ms.len() {
+            end - fade
+        } else {
+            // 最後の区間の終わりは継ぎ目ではない。
+            // 区間の外を指しておけば、予約は入るが実際には掛からない
+            end + fade
+        };
+        commands.push_str(&fade_command(*start, fade_at, fade));
     }
     commands
 }
 
-/// asendcmd のコマンド1行。指定した時刻に afade の向き・開始位置・長さを設定し直す
-fn fade_command(at_ms: u64, fade_ms: u64, direction: &str) -> String {
+/// asendcmd のコマンド1行。
+/// `at_ms` の時点で、`fade_at_ms` から始まるフェードアウトを afade へ予約する
+fn fade_command(at_ms: u64, fade_at_ms: u64, fade_ms: u64) -> String {
     let at = at_ms as f64 / 1000.0;
+    let fade_at = fade_at_ms as f64 / 1000.0;
     let d = fade_ms as f64 / 1000.0;
     let f = FADE_FILTER_NAME;
-    format!("{at:.3} {f} type {direction}, {f} start_time {at:.3}, {f} duration {d:.3};\n")
+    format!("{at:.3} {f} type out, {f} start_time {fade_at:.3}, {f} duration {d:.3};\n")
 }
 
 /// ffmpeg のフィルタ記述へ埋め込めるようにパスを整える。
@@ -117,6 +128,8 @@ pub fn build_cut_audio_filter(
     } else {
         String::new()
     };
+    // afade へ渡す値は、最初のコマンドが届くまでの初期値でしかない。
+    // 残す区間の先頭ごとに asendcmd が設定を入れ直す
     let fade = match fade_commands {
         Some(path) => format!(
             "asetnsamples=n={}:p=0,asendcmd=filename='{}',{}=t=in:st=0:d={:.3},",
@@ -820,16 +833,15 @@ mod tests {
         ");
     }
 
-    /// 継ぎ目ごとにフェードアウトとフェードインを1組ずつ送る。
-    /// 出力の先頭と末尾は継ぎ目ではないので触らない
+    /// 区間の先頭ごとに、その区間の終わりのフェードアウトを予約する。
+    /// 最後の区間の終わりは継ぎ目ではないので、区間の外を指して掛からないようにする
     #[test]
     fn cut_fade_commands_snapshot() {
         let commands = build_cut_fade_commands(&[(0, 2200), (5000, 6000), (9000, 9500)]);
         insta::assert_snapshot!(commands, @r"
-        2.180 afade@paecut type out, afade@paecut start_time 2.180, afade@paecut duration 0.020;
-        5.000 afade@paecut type in, afade@paecut start_time 5.000, afade@paecut duration 0.020;
-        5.980 afade@paecut type out, afade@paecut start_time 5.980, afade@paecut duration 0.020;
-        9.000 afade@paecut type in, afade@paecut start_time 9.000, afade@paecut duration 0.020;
+        0.000 afade@paecut type out, afade@paecut start_time 2.180, afade@paecut duration 0.020;
+        5.000 afade@paecut type out, afade@paecut start_time 5.980, afade@paecut duration 0.020;
+        9.000 afade@paecut type out, afade@paecut start_time 9.520, afade@paecut duration 0.020;
         ");
     }
 
@@ -837,8 +849,8 @@ mod tests {
     #[test]
     fn cut_fade_commands_clamp_short_range() {
         let commands = build_cut_fade_commands(&[(0, 2200), (5000, 5008), (9000, 9500)]);
-        assert!(commands.contains("5.000 afade@paecut type in"));
-        assert!(commands.contains("duration 0.008"));
+        assert!(commands.contains("5.000 afade@paecut type out"));
+        assert!(commands.contains("start_time 5.000, afade@paecut duration 0.008"));
     }
 
     /// 継ぎ目がひとつも無ければフェードの仕組みごと省く
