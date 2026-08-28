@@ -72,7 +72,7 @@ impl Ffmpeg {
 
     fn verify(&self) -> Result<()> {
         for bin in [&self.ffmpeg, &self.ffprobe] {
-            Command::new(bin)
+            no_window_command(bin)
                 .arg("-version")
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
@@ -88,7 +88,7 @@ impl Ffmpeg {
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
     {
-        let output = Command::new(&self.ffprobe)
+        let output = no_window_command(&self.ffprobe)
             .args(args)
             .output()
             .map_err(|e| PaeError::FfmpegNotFound(format!("{}: {e}", self.ffprobe.display())))?;
@@ -126,7 +126,7 @@ impl Ffmpeg {
 
         tracing::debug!(args = ?full_args, "ffmpeg 実行");
 
-        let mut child = Command::new(&self.ffmpeg)
+        let mut child = no_window_command(&self.ffmpeg)
             .args(&full_args)
             .stdin(Stdio::null())
             .stdout(if want_progress {
@@ -194,6 +194,21 @@ impl Ffmpeg {
         }
         Ok(stderr)
     }
+}
+
+/// 外部プロセス起動用の Command を作る。
+/// Windows では CREATE_NO_WINDOW を付けないと、GUI アプリから ffmpeg のような
+/// コンソールアプリを起動するたびに黒いウィンドウが一瞬表示されてしまう
+fn no_window_command(bin: &Path) -> Command {
+    #[allow(unused_mut)]
+    let mut command = Command::new(bin);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    command
 }
 
 /// エラーメッセージ用に stderr の末尾だけを切り出す（先頭は定型ログが多いため）
