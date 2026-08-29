@@ -311,8 +311,10 @@ pub fn save_settings(update: SettingsUpdate) -> Result<(), String> {
 #[serde(rename_all = "camelCase")]
 pub struct FfmpegStatus {
     pub found: bool,
-    /// 使う場所の説明、または見つからなかった理由
-    pub detail: String,
+    /// 見出しに出す一行の要約
+    pub summary: String,
+    /// 見つからなかったときの詳しい理由
+    pub detail: Option<String>,
 }
 
 /// 指定されたフォルダで ffmpeg が使えるかどうかを、設定画面で確かめる。
@@ -323,18 +325,20 @@ pub fn check_ffmpeg(dir: Option<PathBuf>) -> FfmpegStatus {
         Ok(ffmpeg) => {
             let path = ffmpeg.ffmpeg_path();
             // PATH から見つかったときは親ディレクトリを持たない
-            let detail = match path.parent().filter(|dir| !dir.as_os_str().is_empty()) {
+            let summary = match path.parent().filter(|dir| !dir.as_os_str().is_empty()) {
                 Some(dir) => format!("{} の ffmpeg を使います", dir.display()),
                 None => "PATH から見つかった ffmpeg を使います".to_string(),
             };
             FfmpegStatus {
                 found: true,
-                detail,
+                summary,
+                detail: None,
             }
         }
         Err(e) => FfmpegStatus {
             found: false,
-            detail: e.to_string(),
+            summary: "見つかりませんでした".to_string(),
+            detail: Some(e.to_string()),
         },
     }
 }

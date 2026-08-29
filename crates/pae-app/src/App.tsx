@@ -122,7 +122,13 @@ function App() {
     setFfmpegStatus(null);
     invoke<FfmpegStatus>("check_ffmpeg", { dir })
       .then(setFfmpegStatus)
-      .catch((e) => setFfmpegStatus({ found: false, detail: String(e) }));
+      .catch((e) =>
+        setFfmpegStatus({
+          found: false,
+          summary: "確かめられませんでした",
+          detail: String(e),
+        }),
+      );
   }, []);
 
   // 起動時に保存済み設定とモデル一覧を読み込む
@@ -381,6 +387,13 @@ function App() {
   const running = phase === "running";
   const anyOutputSelected = Object.values(outputs).some(Boolean);
 
+  // ffmpeg が見つかっていないときだけ、選ぶことをうながす言葉にする
+  const ffmpegPickerLabel = ffmpegDir
+    ? "別の場所を選ぶ"
+    : ffmpegStatus?.found === false
+      ? "フォルダを選択"
+      : "自分で指定する";
+
   if (showSettings) {
     return (
       <main className="container">
@@ -466,22 +479,25 @@ function App() {
           </div>
           <div className="field">
             <label>ffmpeg の場所</label>
-            <p className="hint">
-              ふだんは自動で探すため指定は要りません。
-              見つからないときだけ、ffmpeg の入っているフォルダを選んでください
-            </p>
-            <button className="picker" onClick={selectFfmpegDir}>
-              {ffmpegDir ?? "フォルダを選択"}
-            </button>
+            <div className="ffmpeg-status">
+              <p className={ffmpegStatus?.found === false ? "hint warning" : "hint"}>
+                {/* 自分で指定したときは、そのフォルダを見せれば説明は要らない */}
+                {ffmpegDir ??
+                  (ffmpegStatus
+                    ? `自動検索（${ffmpegStatus.summary}）`
+                    : "確認しています…")}
+              </p>
+              <button className="link" onClick={selectFfmpegDir}>
+                {ffmpegPickerLabel}
+              </button>
+            </div>
+            {ffmpegStatus?.detail && (
+              <p className="hint warning status-detail">{ffmpegStatus.detail}</p>
+            )}
             {ffmpegDir && (
               <button className="link" onClick={clearFfmpegDir}>
                 指定をやめて自動で探す
               </button>
-            )}
-            {ffmpegStatus && (
-              <p className={ffmpegStatus.found ? "hint" : "hint warning"}>
-                {ffmpegStatus.detail}
-              </p>
             )}
           </div>
         </section>

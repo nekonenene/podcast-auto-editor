@@ -286,6 +286,28 @@ input[type="range"] {
   color: #8e8e93;
 }
 
+/* ffmpeg が見つからない理由は探した場所を1行ずつ並べるため、改行を保つ */
+.status-detail {
+  white-space: pre-wrap;
+}
+
+/* いまの状態と、場所を指定するボタンを横に並べる。
+   ボタンの下へ状態を置くと、ボタンの補足説明のように読めてしまうため */
+.ffmpeg-status {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.ffmpeg-status > p {
+  flex: 1;
+}
+
+.ffmpeg-status > .link {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
 .error {
   margin-top: 16px;
   padding: 12px;

@@ -74,7 +74,8 @@ export const MP3_BITRATES = [64, 96, 128, 192, 256, 320, 0] as const;
 // ffmpeg が使える状態かどうか。設定画面で表示する
 export interface FfmpegStatus {
   found: boolean;
-  detail: string;
+  summary: string;
+  detail: string | null;
 }
 
 export interface MediaInfo {
