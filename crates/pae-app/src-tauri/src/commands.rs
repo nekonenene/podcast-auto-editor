@@ -292,6 +292,8 @@ pub struct SettingsUpdate {
     pub outputs: pae_core::config::OutputSelection,
     pub voice_duck_db: f32,
     pub mp3_bitrate_kbps: u32,
+    /// ffmpeg / ffprobe のあるフォルダ。None なら自動で探す
+    pub ffmpeg_dir: Option<PathBuf>,
 }
 
 #[tauri::command]
@@ -300,7 +302,41 @@ pub fn save_settings(update: SettingsUpdate) -> Result<(), String> {
     config.outputs = update.outputs;
     config.bgm.voice_duck_db = update.voice_duck_db;
     config.mp3_bitrate_kbps = update.mp3_bitrate_kbps;
+    config.ffmpeg_dir = update.ffmpeg_dir;
     config.save().map_err(|e| e.to_string())
+}
+
+/// 設定画面へ返す ffmpeg の状態
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FfmpegStatus {
+    pub found: bool,
+    /// 使う場所の説明、または見つからなかった理由
+    pub detail: String,
+}
+
+/// 指定されたフォルダで ffmpeg が使えるかどうかを、設定画面で確かめる。
+/// dir が None のときは自動探索の結果を返す
+#[tauri::command]
+pub fn check_ffmpeg(dir: Option<PathBuf>) -> FfmpegStatus {
+    match Ffmpeg::locate(dir.as_deref()) {
+        Ok(ffmpeg) => {
+            let path = ffmpeg.ffmpeg_path();
+            // PATH から見つかったときは親ディレクトリを持たない
+            let detail = match path.parent().filter(|dir| !dir.as_os_str().is_empty()) {
+                Some(dir) => format!("{} の ffmpeg を使います", dir.display()),
+                None => "PATH から見つかった ffmpeg を使います".to_string(),
+            };
+            FfmpegStatus {
+                found: true,
+                detail,
+            }
+        }
+        Err(e) => FfmpegStatus {
+            found: false,
+            detail: e.to_string(),
+        },
+    }
 }
 
 /// BGM 音量プレビューのリクエスト。EQ 分離は設定に保存された値を使う

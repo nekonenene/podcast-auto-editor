@@ -246,6 +246,18 @@ h1 {
   padding: 4px 8px;
 }
 
+/* 文章のリンクのように見せる小さなボタン。
+   .field は縦並びなので、幅いっぱいに広がらないよう左端へ寄せる */
+.link {
+  align-self: flex-start;
+  border: none;
+  background: transparent;
+  color: #0a84ff;
+  font-size: 12px;
+  cursor: pointer;
+  padding: 0;
+}
+
 select,
 input[type="number"],
 input[type="range"] {

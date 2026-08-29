@@ -71,6 +71,12 @@ export interface AppConfig {
 // 0 は VBR 高音質 (可変ビットレート) を表す
 export const MP3_BITRATES = [64, 96, 128, 192, 256, 320, 0] as const;
 
+// ffmpeg が使える状態かどうか。設定画面で表示する
+export interface FfmpegStatus {
+  found: boolean;
+  detail: string;
+}
+
 export interface MediaInfo {
   path: string;
   duration_ms: number;

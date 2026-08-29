@@ -54,9 +54,12 @@ impl Ffmpeg {
             fallback_dirs.push(PathBuf::from("/usr/local/bin"));
         }
         if cfg!(windows) {
-            // winget はシンボリックリンクを Links に集約する
-            if let Some(local) = std::env::var_os("LOCALAPPDATA") {
-                fallback_dirs.push(PathBuf::from(local).join(r"Microsoft\WinGet\Links"));
+            // winget はシンボリックリンクを Links に集約する。
+            // 場所は環境変数の LOCALAPPDATA でなく Windows へ直接たずねる。
+            // インストーラーから起動されたときなど、環境変数が別のユーザーの
+            // 場所を指していることがあるため
+            if let Some(dirs) = directories::BaseDirs::new() {
+                fallback_dirs.push(dirs.data_local_dir().join(r"Microsoft\WinGet\Links"));
             }
             fallback_dirs.push(PathBuf::from(r"C:\ProgramData\chocolatey\bin"));
             fallback_dirs.push(PathBuf::from(r"C:\ffmpeg\bin"));
@@ -80,6 +83,11 @@ impl Ffmpeg {
             "次の場所を探しましたが、どれも実行できませんでした。\n{searched}\n\
              ffmpeg のあるフォルダは環境変数 PAE_FFMPEG_DIR で指定できます"
         )))
+    }
+
+    /// いま使う ffmpeg の実行ファイル。設定画面で場所を見せるために使う
+    pub fn ffmpeg_path(&self) -> &Path {
+        &self.ffmpeg
     }
 
     /// 指定したディレクトリ直下の ffmpeg / ffprobe を指す。

@@ -4,6 +4,7 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open } from "@tauri-apps/plugin-dialog";
 import type {
   AppConfig,
+  FfmpegStatus,
   JobResult,
   MediaInfo,
   ModelInfo,
@@ -28,6 +29,14 @@ const VIDEO_EXTENSIONS = ["mp4", "mov", "m4v", "webm", "mkv"];
 const AUDIO_EXTENSIONS = ["mp3", "wav", "m4a", "aac", "flac"];
 
 type UiPhase = "idle" | "running" | "done" | "error";
+
+// 設定画面で変更でき、その場で保存される項目
+type SettingsForm = {
+  outputs: OutputSelection;
+  voiceDuck: boolean;
+  mp3Bitrate: number;
+  ffmpegDir: string | null;
+};
 
 function formatDuration(ms: number): string {
   const total = Math.round(ms / 1000);
@@ -94,6 +103,8 @@ function App() {
   const [voiceDuck, setVoiceDuck] = useState(true);
   const [outputs, setOutputs] = useState<OutputSelection>(DEFAULT_OUTPUTS);
   const [mp3Bitrate, setMp3Bitrate] = useState(128);
+  const [ffmpegDir, setFfmpegDir] = useState<string | null>(null);
+  const [ffmpegStatus, setFfmpegStatus] = useState<FfmpegStatus | null>(null);
   const [showSettings, setShowSettings] = useState(false);
 
   const [previewing, setPreviewing] = useState(false);
@@ -105,6 +116,14 @@ function App() {
   const [progress, setProgress] = useState<ProgressEvent | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<JobResult | null>(null);
+
+  // 指定されたフォルダで ffmpeg が使えるかを確かめ、結果を設定画面へ出す
+  const checkFfmpeg = useCallback((dir: string | null) => {
+    setFfmpegStatus(null);
+    invoke<FfmpegStatus>("check_ffmpeg", { dir })
+      .then(setFfmpegStatus)
+      .catch((e) => setFfmpegStatus({ found: false, detail: String(e) }));
+  }, []);
 
   // 起動時に保存済み設定とモデル一覧を読み込む
   useEffect(() => {
@@ -124,6 +143,8 @@ function App() {
         setDiarize(config.diarize ?? false);
         setSpeakerCount(config.speaker_count ?? 2);
         setOutputDir(config.output_dir);
+        setFfmpegDir(config.ffmpeg_dir);
+        checkFfmpeg(config.ffmpeg_dir);
       })
       .catch((e) => setError(String(e)));
     invoke<ModelInfo[]>("list_models")
@@ -260,26 +281,38 @@ function App() {
     // playPreview は設定値に依存しているため、設定変更のたびに発火する
   }, [bgmVolume]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // 設定画面での変更は即座に保存する
+  // 設定画面での変更は即座に保存する。
+  // 変えたい項目だけを渡し、残りは現在の値をそのまま使う
   const saveSettings = useCallback(
-    (
-      nextOutputs: OutputSelection,
-      nextVoiceDuck: boolean,
-      nextMp3Bitrate: number,
-    ) => {
-      setOutputs(nextOutputs);
-      setVoiceDuck(nextVoiceDuck);
-      setMp3Bitrate(nextMp3Bitrate);
+    (patch: Partial<SettingsForm>) => {
+      const next = { outputs, voiceDuck, mp3Bitrate, ffmpegDir, ...patch };
+      setOutputs(next.outputs);
+      setVoiceDuck(next.voiceDuck);
+      setMp3Bitrate(next.mp3Bitrate);
+      setFfmpegDir(next.ffmpegDir);
       invoke("save_settings", {
         update: {
-          outputs: nextOutputs,
-          voiceDuckDb: nextVoiceDuck ? -4.0 : 0.0,
-          mp3BitrateKbps: nextMp3Bitrate,
+          outputs: next.outputs,
+          voiceDuckDb: next.voiceDuck ? -4.0 : 0.0,
+          mp3BitrateKbps: next.mp3Bitrate,
+          ffmpegDir: next.ffmpegDir,
         },
       }).catch((e) => setError(String(e)));
     },
-    [],
+    [outputs, voiceDuck, mp3Bitrate, ffmpegDir],
   );
+
+  const selectFfmpegDir = async () => {
+    const dir = await open({ directory: true });
+    if (typeof dir !== "string") return;
+    saveSettings({ ffmpegDir: dir });
+    checkFfmpeg(dir);
+  };
+
+  const clearFfmpegDir = () => {
+    saveSettings({ ffmpegDir: null });
+    checkFfmpeg(null);
+  };
 
   const start = async () => {
     if (!video || !outputDir) return;
@@ -366,11 +399,9 @@ function App() {
                   type="checkbox"
                   checked={outputs[key]}
                   onChange={(e) =>
-                    saveSettings(
-                      { ...outputs, [key]: e.target.checked },
-                      voiceDuck,
-                      mp3Bitrate,
-                    )
+                    saveSettings({
+                      outputs: { ...outputs, [key]: e.target.checked },
+                    })
                   }
                 />
                 {OUTPUT_LABELS[key]}
@@ -388,11 +419,9 @@ function App() {
                       type="checkbox"
                       checked={outputs[key]}
                       onChange={(e) =>
-                        saveSettings(
-                          { ...outputs, [key]: e.target.checked },
-                          voiceDuck,
-                          mp3Bitrate,
-                        )
+                        saveSettings({
+                          outputs: { ...outputs, [key]: e.target.checked },
+                        })
                       }
                     />
                     {OUTPUT_LABELS[key]}
@@ -409,7 +438,7 @@ function App() {
             <select
               value={mp3Bitrate}
               onChange={(e) =>
-                saveSettings(outputs, voiceDuck, Number(e.target.value))
+                saveSettings({ mp3Bitrate: Number(e.target.value) })
               }
             >
               {MP3_BITRATES.map((kbps) => (
@@ -430,12 +459,30 @@ function App() {
               <input
                 type="checkbox"
                 checked={voiceDuck}
-                onChange={(e) =>
-                  saveSettings(outputs, e.target.checked, mp3Bitrate)
-                }
+                onChange={(e) => saveSettings({ voiceDuck: e.target.checked })}
               />
               声の帯域で BGM を下げる (聞き取りやすくなります)
             </label>
+          </div>
+          <div className="field">
+            <label>ffmpeg の場所</label>
+            <p className="hint">
+              ふだんは自動で探すため指定は要りません。
+              見つからないときだけ、ffmpeg の入っているフォルダを選んでください
+            </p>
+            <button className="picker" onClick={selectFfmpegDir}>
+              {ffmpegDir ?? "フォルダを選択"}
+            </button>
+            {ffmpegDir && (
+              <button className="link" onClick={clearFfmpegDir}>
+                指定をやめて自動で探す
+              </button>
+            )}
+            {ffmpegStatus && (
+              <p className={ffmpegStatus.found ? "hint" : "hint warning"}>
+                {ffmpegStatus.detail}
+              </p>
+            )}
           </div>
         </section>
       </main>

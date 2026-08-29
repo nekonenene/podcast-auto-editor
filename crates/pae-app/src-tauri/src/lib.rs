@@ -19,6 +19,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::get_config,
             commands::save_settings,
+            commands::check_ffmpeg,
             commands::list_models,
             commands::diarize_model_info,
             commands::probe_media,
