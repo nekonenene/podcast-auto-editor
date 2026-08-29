@@ -457,12 +457,14 @@ fn transcribe_media(
 
     // 解析用の WAV は1回だけ抽出し、文字起こしと話者分離で使い回す
     let wav_path = temp_dir.join("transcribe.wav");
-    let mut segments = runner.run(Stage::Transcribe, |p| {
+    let segments = runner.run(Stage::Transcribe, |p| {
         extract_analysis_wav(ffmpeg, media, &wav_path, duration_ms, &mut |_| {}, cancel)?;
         let (samples, _) = read_wav_samples(&wav_path)?;
         let mut transcriber = WhisperTranscriber::load(&model_path)?;
         transcriber.transcribe(&samples, "ja", p, cancel)
     })?;
+    // whisper が書き足した話者名ラベルは、話者分離のラベルを付ける前に落としておく
+    let mut segments = crate::transcribe::cleanup::strip_hallucinated_speaker_labels(segments);
 
     if let Some(embedding_model_path) = embedding_model_path {
         let ranges = timeline_to_speech_ranges(timeline);

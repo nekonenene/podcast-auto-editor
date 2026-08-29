@@ -1,5 +1,6 @@
 //! ローカル文字起こし。whisper.cpp (whisper-rs) を使い、音声を外部へ送信しない
 
+pub mod cleanup;
 pub mod model;
 
 use std::path::Path;
