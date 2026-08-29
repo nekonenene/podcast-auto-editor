@@ -18,26 +18,36 @@ pub struct Ffmpeg {
 
 impl Ffmpeg {
     pub fn locate(override_dir: Option<&Path>) -> Result<Self> {
-        let dir = override_dir
-            .map(|p| p.to_path_buf())
-            .or_else(|| std::env::var_os("PAE_FFMPEG_DIR").map(PathBuf::from));
+        let specified = override_dir
+            .map(|dir| (dir.to_path_buf(), "設定"))
+            .or_else(|| {
+                std::env::var_os("PAE_FFMPEG_DIR")
+                    .map(|dir| (PathBuf::from(dir), "環境変数 PAE_FFMPEG_DIR"))
+            });
 
-        if let Some(dir) = dir {
-            let candidate = Self {
-                ffmpeg: dir.join("ffmpeg"),
-                ffprobe: dir.join("ffprobe"),
+        // 場所を明示されたときは、そこが駄目でも他を探さない。
+        // 黙って別の ffmpeg を使うと、指定した意味がなくなってしまうため
+        if let Some((dir, source)) = specified {
+            let candidate = Self::in_dir(&dir);
+            return match candidate.verify() {
+                Ok(()) => Ok(candidate),
+                Err(reason) => Err(PaeError::FfmpegNotFound(format!(
+                    "{source} で指定された {} を使おうとしましたが、実行できませんでした。\n  {reason}",
+                    dir.display()
+                ))),
             };
-            candidate.verify()?;
-            return Ok(candidate);
         }
 
         // PATH → よくあるインストール先の順で探す。
         // macOS の GUI アプリは Finder から起動されるとシェルの PATH を継承しないため、
         // Homebrew などの標準的な場所へのフォールバックが必要
-        let mut candidates = vec![Self {
-            ffmpeg: PathBuf::from("ffmpeg"),
-            ffprobe: PathBuf::from("ffprobe"),
-        }];
+        let mut candidates = vec![(
+            "PATH".to_string(),
+            Self {
+                ffmpeg: PathBuf::from("ffmpeg"),
+                ffprobe: PathBuf::from("ffprobe"),
+            },
+        )];
         let mut fallback_dirs: Vec<PathBuf> = Vec::new();
         if cfg!(target_os = "macos") {
             fallback_dirs.push(PathBuf::from("/opt/homebrew/bin"));
@@ -53,31 +63,56 @@ impl Ffmpeg {
             fallback_dirs.push(PathBuf::from(r"C:\Program Files\ffmpeg\bin"));
         }
         for dir in fallback_dirs {
-            candidates.push(Self {
-                // 拡張子なしでも Windows では .exe が自動補完される
-                ffmpeg: dir.join("ffmpeg"),
-                ffprobe: dir.join("ffprobe"),
-            });
+            candidates.push((dir.display().to_string(), Self::in_dir(&dir)));
         }
 
-        let mut last_error = None;
-        for candidate in candidates {
+        // 探した場所をすべて記録しておく。1か所だけ報告すると、
+        // 「最後に試した場所」を「探しに行った唯一の場所」と読み違えてしまうため
+        let mut reasons = Vec::new();
+        for (label, candidate) in candidates {
             match candidate.verify() {
                 Ok(()) => return Ok(candidate),
-                Err(e) => last_error = Some(e),
+                Err(reason) => reasons.push(format!("  - {label}: {reason}")),
             }
         }
-        Err(last_error.expect("候補は必ず1つ以上ある"))
+        let searched = reasons.join("\n");
+        Err(PaeError::FfmpegNotFound(format!(
+            "次の場所を探しましたが、どれも実行できませんでした。\n{searched}\n\
+             ffmpeg のあるフォルダは環境変数 PAE_FFMPEG_DIR で指定できます"
+        )))
     }
 
-    fn verify(&self) -> Result<()> {
+    /// 指定したディレクトリ直下の ffmpeg / ffprobe を指す。
+    /// 拡張子は付けない。Windows では起動時に .exe が自動で補われる
+    fn in_dir(dir: &Path) -> Self {
+        Self {
+            ffmpeg: dir.join("ffmpeg"),
+            ffprobe: dir.join("ffprobe"),
+        }
+    }
+
+    /// 実際に `-version` を実行して、使える組み合わせかどうかを確かめる。
+    /// 駄目だった理由は、そのままユーザーへ見せられる文にして返す
+    fn verify(&self) -> std::result::Result<(), String> {
         for bin in [&self.ffmpeg, &self.ffprobe] {
-            no_window_command(bin)
+            match no_window_command(bin)
                 .arg("-version")
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
                 .status()
-                .map_err(|_| PaeError::FfmpegNotFound(bin.display().to_string()))?;
+            {
+                Ok(status) if status.success() => {}
+                Ok(status) => {
+                    return Err(format!(
+                        "{} は起動できましたが、終了コード {} で失敗しました",
+                        file_name(bin),
+                        status
+                            .code()
+                            .map_or_else(|| "不明".to_string(), |c| c.to_string())
+                    ));
+                }
+                Err(e) => return Err(format!("{}: {e}", file_name(bin))),
+            }
         }
         Ok(())
     }
@@ -91,7 +126,12 @@ impl Ffmpeg {
         let output = no_window_command(&self.ffprobe)
             .args(args)
             .output()
-            .map_err(|e| PaeError::FfmpegNotFound(format!("{}: {e}", self.ffprobe.display())))?;
+            .map_err(|e| {
+                PaeError::FfmpegNotFound(format!(
+                    "{} の起動に失敗しました: {e}",
+                    self.ffprobe.display()
+                ))
+            })?;
         if !output.status.success() {
             return Err(PaeError::ExternalProcess {
                 tool: "ffprobe".into(),
@@ -136,7 +176,12 @@ impl Ffmpeg {
             })
             .stderr(Stdio::piped())
             .spawn()
-            .map_err(|e| PaeError::FfmpegNotFound(format!("{}: {e}", self.ffmpeg.display())))?;
+            .map_err(|e| {
+                PaeError::FfmpegNotFound(format!(
+                    "{} の起動に失敗しました: {e}",
+                    self.ffmpeg.display()
+                ))
+            })?;
 
         // stderr は別スレッドで吸い出す。パイプが詰まって ffmpeg が
         // 停止するのを防ぐため、進捗パースと並行して読み続ける必要がある
@@ -196,6 +241,14 @@ impl Ffmpeg {
     }
 }
 
+/// エラー文では場所を別に示すため、ここではファイル名だけを取り出す
+fn file_name(path: &Path) -> String {
+    path.file_name().map_or_else(
+        || path.display().to_string(),
+        |name| name.to_string_lossy().into_owned(),
+    )
+}
+
 /// 外部プロセス起動用の Command を作る。
 /// Windows では CREATE_NO_WINDOW を付けないと、GUI アプリから ffmpeg のような
 /// コンソールアプリを起動するたびに黒いウィンドウが一瞬表示されてしまう
@@ -222,4 +275,19 @@ fn tail(s: &str, max_bytes: usize) -> String {
         .find(|&i| s.is_char_boundary(i))
         .unwrap_or(start);
     format!("...(省略)...\n{}", &s[start..])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 場所を明示されたときは、そこだけを報告する
+    #[test]
+    fn locate_reports_only_the_specified_dir() {
+        let dir = PathBuf::from("/no/such/dir");
+        let message = Ffmpeg::locate(Some(&dir)).unwrap_err().to_string();
+        assert!(message.contains("設定"), "{message}");
+        assert!(message.contains("no/such/dir"), "{message}");
+        assert!(!message.contains("PATH"), "{message}");
+    }
 }

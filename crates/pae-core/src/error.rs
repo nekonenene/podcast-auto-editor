@@ -7,7 +7,10 @@ pub enum PaeError {
     #[error("入力ファイルが見つかりません: {0}")]
     InputNotFound(PathBuf),
 
-    #[error("ffmpeg / ffprobe が見つかりません。パス: {0}")]
+    #[error(
+        "ffmpeg / ffprobe が見つかりません。
+{0}"
+    )]
     FfmpegNotFound(String),
 
     #[error("{tool} の実行に失敗しました (exit code: {code:?})\n{stderr}")]
