@@ -16,13 +16,13 @@ jobs:
   check:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
 
       # 統合テストに ffmpeg / ffprobe が必要。
       # このアクションは libx264 入りのビルドをキャッシュ付きで入れてくれる
       - uses: FedericoCarboni/setup-ffmpeg@v3
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@v7.1.0
         with:
           # ローカルの開発環境に合わせる
           node-version: 26
@@ -35,7 +35,7 @@ jobs:
 
       # whisper.cpp の CMake 成果物や ONNX Runtime のダウンロードバイナリは
       # target/ 配下に置かれるため、このキャッシュで2回目以降が大幅に速くなる
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2.9.3
 
       - name: npm ci
         working-directory: crates/pae-app
