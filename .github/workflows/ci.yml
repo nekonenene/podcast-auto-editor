@@ -29,7 +29,7 @@ jobs:
           cache: npm
           cache-dependency-path: crates/pae-app/package-lock.json
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.99.1
         with:
           components: rustfmt, clippy
 
